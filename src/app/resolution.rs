@@ -28,7 +28,11 @@ impl OfflineApp {
                 Duration::from_millis(self.options.lock_timeout_ms),
             )?;
             let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
-            engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
+            if catalog.operation_state()?.is_some() {
+                engine.recover_indexed(&writer, &catalog)?;
+            } else {
+                engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
+            }
             catalog.guard_current(None)?;
             Some(writer)
         };

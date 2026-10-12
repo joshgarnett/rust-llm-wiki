@@ -151,6 +151,15 @@ pub(super) fn present(
                     )
                 )?;
             }
+            if key == "generation" {
+                writeln!(
+                    output,
+                    "  Reasoning effort: {}",
+                    data["provider"][key]["reasoning_effort"]
+                        .as_str()
+                        .unwrap_or("Provider default")
+                )?;
+            }
             if let Some(limit) = data["provider"][key]["effective_output_token_limit"].as_u64() {
                 writeln!(output, "  Service output token limit: {limit}")?;
             }

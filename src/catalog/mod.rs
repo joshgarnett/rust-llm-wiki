@@ -76,3 +76,5 @@ mod external_page_acceptance_tests;
 pub(crate) mod literal_projection;
 
 pub(crate) mod health;
+
+pub(crate) mod graph_projection;

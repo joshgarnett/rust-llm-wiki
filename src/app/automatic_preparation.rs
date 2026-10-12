@@ -1025,7 +1025,7 @@ impl OfflineApp {
             }
         }
         let directory = input.resolve(&VaultRelativePath::new(".wiki/state/embedding-jobs")?)?;
-        let mut marked = BTreeSet::new();
+        let mut marked = BTreeMap::new();
         match std::fs::read_dir(directory) {
             Ok(entries) => {
                 for (index, entry) in entries.enumerate() {
@@ -1070,7 +1070,7 @@ impl OfflineApp {
                         )
                     })?;
                     runs.insert(marker.run_id.clone());
-                    marked.insert(marker.run_id);
+                    marked.insert(marker.run_id.clone(), marker);
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1083,6 +1083,7 @@ impl OfflineApp {
         }
         let service = runtime.service.summary();
         auto.progress.borrow_mut().prior_runs = runs.clone();
+        let mut unmarked_pending_run = None;
         for run in runs {
             auto.remaining_ms()?;
             let ledger = self.embedding_ledger_for(runtime, run.clone())?;
@@ -1203,11 +1204,40 @@ impl OfflineApp {
                 }
                 unchanged_failure |= unchanged;
             }
-            if !marked.contains(&run)
+            let unstarted = if let Some(marker) = marked.get(&run) {
+                marker.task_keys
+                    == inspection
+                        .spec
+                        .tasks
+                        .iter()
+                        .map(|task| task.key.clone())
+                        .collect::<Vec<_>>()
+                    && automatic_unstarted_scope(
+                        runtime,
+                        &inspection,
+                        &marker.operation,
+                        &marker.space,
+                        &marker.expected_units,
+                    )?
+                    && ledger.can_close_unstarted_embedding(&inspection.spec)?
+            } else {
+                false
+            };
+            let unmarked_pending = !unstarted
+                && !matches!(inspection.state, RunState::Completed | RunState::Failed)
+                && inspection.attempts.is_empty()
+                && inspection
+                    .tasks
+                    .values()
+                    .any(|task| !matches!(task.state, TaskState::Completed | TaskState::Failed));
+            if unmarked_pending {
+                unmarked_pending_run.get_or_insert_with(|| run.clone());
+            }
+            if !marked.contains_key(&run)
                 || !inspection.budget.guarantee_intact
                 || unresolved
                 || unchanged_failure
-                || matches!(inspection.state, RunState::Paused | RunState::Stopped)
+                || matches!(inspection.state, RunState::Paused | RunState::Stopped) && !unstarted
             {
                 runtime.automatic_block(&run);
                 return Err(with_embedding_context(
@@ -1218,6 +1248,16 @@ impl OfflineApp {
                     serde_json::json!({"run_id":run}),
                 ));
             }
+        }
+        if let Some(run) = unmarked_pending_run {
+            runtime.automatic_block(&run);
+            return Err(with_embedding_context(
+                fail(
+                    ErrorCode::RecoveryRequired,
+                    "retained pending work has no automatic origin; continue its existing Run explicitly",
+                ),
+                serde_json::json!({"run_id":run}),
+            ));
         }
         auto.progress.borrow_mut().accounting_checked = true;
         Ok(())

@@ -473,6 +473,42 @@ impl SourceStore {
             if title_changed {
                 changes.insert("title".into(), title.into());
             }
+            if crate::storage::layout::layout_kind(self.fs.root())?
+                == crate::storage::layout::LayoutKind::ReadableSources
+            {
+                let proposed =
+                    super::presentation_planning::proposed_source(&source_note, &changes)?;
+                let presentation = super::presentation_planning::plan_change(
+                    &proposed,
+                    source_note.body(),
+                    Some(&source_note),
+                    &operations,
+                    &Default::default(),
+                    &mut |path, maximum| {
+                        crate::vault::fs::read_regular_bounded(
+                            self.fs.root(),
+                            path,
+                            false,
+                            maximum,
+                            "saved-note",
+                        )
+                    },
+                )?;
+                changes.insert(
+                    "wiki_presentation".into(),
+                    presentation.plan.metadata.encode()?.into(),
+                );
+                for document in presentation.captured {
+                    if let Some(prior) = captured
+                        .files
+                        .insert(document.path.clone(), document.clone())
+                        && prior.hash != document.hash
+                    {
+                        return Err(integrity("saved-note input changed during refresh"));
+                    }
+                }
+                operations.extend(presentation.plan.writes);
+            }
             operations.push(ExpectedWrite {
                 target: source.path.clone(),
                 expected: ExpectedState::Hash(source.hash.clone()),

@@ -15,7 +15,7 @@ struct Cursor {
 }
 pub(crate) fn fingerprint(query: &str, plan: &QueryPlan) -> Result<Blake3Hash> {
     serde_json::to_vec(&(
-        "lwiki-query-v1",
+        "lwiki-query-readable-metadata-v2",
         query,
         plan.mode,
         &plan.filters,
@@ -90,5 +90,7 @@ fn digit(value: u8) -> Result<u8> {
     }
 }
 fn stale(message: &str) -> WikiError {
-    WikiError::new(ErrorCode::CursorStale, message)
+    let mut error = WikiError::new(ErrorCode::CursorStale, message);
+    error.hint = Some("Repeat the command without --cursor to start a new result set.".into());
+    error
 }

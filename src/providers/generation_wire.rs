@@ -348,7 +348,8 @@ pub(super) fn prepare(
         .output_limit_field
         .unwrap_or(OutputLimitField::MaxCompletionTokens);
     let response_mode = s.response_mode.unwrap_or(ResponseMode::TextJson);
-    let basis = if surface == GenerationSurface::ChatCompletions
+    let basis = if s.reasoning_effort.is_none()
+        && surface == GenerationSurface::ChatCompletions
         && s.ca_bytes.is_none()
         && s.url == "https://api.openai.com/v1/chat/completions"
         && model == "gpt-4.1-2025-04-14"
@@ -358,7 +359,8 @@ pub(super) fn prepare(
             return Err(WikiError::invalid("documented completion ceiling exceeded"));
         }
         BoundBasis::OpenAiChatGpt41SnapshotV1
-    } else if surface == GenerationSurface::Responses
+    } else if s.reasoning_effort.is_none()
+        && surface == GenerationSurface::Responses
         && s.ca_bytes.is_none()
         && s.url == "https://api.openai.com/v1/responses"
         && model == "gpt-4.1-mini-2025-04-14"
@@ -389,6 +391,9 @@ pub(super) fn prepare(
     let body = match surface {
         GenerationSurface::ChatCompletions => {
             let mut body = json!({"model":model,"messages":[{"role":match instruction_role{InstructionRole::System=>"system",InstructionRole::Developer=>"developer"},"content":instructions},{"role":"user","content":data}],"stream":false,"n":1});
+            if let Some(effort) = s.reasoning_effort {
+                body["reasoning_effort"] = json!(effort);
+            }
             body[match output_limit_field {
                 OutputLimitField::MaxCompletionTokens => "max_completion_tokens",
                 OutputLimitField::MaxTokens => "max_tokens",
@@ -400,6 +405,9 @@ pub(super) fn prepare(
         }
         GenerationSurface::Responses => {
             let mut body = json!({"model":model,"instructions":instructions,"input":[{"role":"user","content":data}],"stream":false,"store":false,"max_output_tokens":max_output_tokens});
+            if let Some(effort) = s.reasoning_effort {
+                body["reasoning"] = json!({"effort":effort});
+            }
             if matches!(response_mode, ResponseMode::JsonSchema) {
                 body["text"] = json!({"format":{"type":"json_schema","name":"lwiki_output","strict":true,"schema":provider_schema.as_deref().expect("projected schema")}});
             }
@@ -422,6 +430,7 @@ pub(super) fn prepare(
             instruction_role,
             output_limit_field,
             response_mode,
+            reasoning_effort: s.reasoning_effort,
             total_generated_token_limit: *max_output_tokens,
             schema_fingerprint,
             schema: Arc::new(output_schema.clone()),

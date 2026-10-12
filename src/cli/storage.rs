@@ -17,6 +17,8 @@ pub enum StorageCommand {
     Plan(StorageLimits),
     /// Migrate and compact retained operational data; keep full-vault backups.
     Cleanup(StorageLimits),
+    /// Make sources readable in Obsidian while preserving all notes and history.
+    Migrate(SourceLayoutLimits),
 }
 impl StorageCommand {
     pub fn name(&self) -> &'static str {
@@ -24,8 +26,21 @@ impl StorageCommand {
             Self::Inventory(_) => "storage inventory",
             Self::Plan(_) => "storage plan",
             Self::Cleanup(_) => "storage cleanup",
+            Self::Migrate(_) => "storage migrate",
         }
     }
+}
+#[derive(Debug, Args)]
+pub struct SourceLayoutLimits {
+    /// Maximum files to inspect before making any changes.
+    #[arg(long, default_value_t = 100_000)]
+    pub max_files: usize,
+    /// Maximum bytes to inspect before making any changes.
+    #[arg(long, default_value_t = 1_073_741_824)]
+    pub max_bytes: u64,
+    /// Use only the exact plan returned by storage migrate --dry-run.
+    #[arg(long)]
+    pub expected_plan: Option<Blake3Hash>,
 }
 #[derive(Debug, Args)]
 pub struct StorageLimits {
@@ -43,8 +58,33 @@ pub struct StorageLimits {
     pub expected_plan: Option<Blake3Hash>,
 }
 pub fn execute(command: &StorageCommand, app: &OfflineApp) -> Result<Value> {
+    if let StorageCommand::Migrate(limits) = command {
+        if app.options().stage_only {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "storage migration cannot be staged; use storage migrate --dry-run to preview it",
+            ));
+        }
+        let options = storage::SourceLayoutOptions {
+            max_files: limits.max_files,
+            max_bytes: limits.max_bytes,
+            expected_plan: limits.expected_plan.clone(),
+        };
+        let result = if app.options().dry_run {
+            serde_json::to_value(storage::plan_source_layout(app.fs(), &options)?)
+        } else {
+            let writer = WriterPermit::acquire(
+                app.fs().root(),
+                Duration::from_millis(app.options().lock_timeout_ms),
+            )?;
+            // The migration publishes the resulting catalog before returning.
+            serde_json::to_value(storage::migrate_source_layout(app.fs(), &writer, &options)?)
+        };
+        return result.map_err(|_| WikiError::invalid("storage result encoding"));
+    }
     let limits = match command {
         StorageCommand::Inventory(x) | StorageCommand::Plan(x) | StorageCommand::Cleanup(x) => x,
+        StorageCommand::Migrate(_) => unreachable!("handled above"),
     };
     let options = storage::StorageOptions {
         retain_undo_changes: limits.retain_undo_changes,
@@ -59,6 +99,7 @@ pub fn execute(command: &StorageCommand, app: &OfflineApp) -> Result<Value> {
         ));
     }
     match command {
+        StorageCommand::Migrate(_) => unreachable!("handled above"),
         StorageCommand::Inventory(_) => {
             serde_json::to_value(storage::inventory(app.fs(), &options)?)
                 .map_err(|_| WikiError::invalid("storage result encoding"))
@@ -119,4 +160,64 @@ pub fn execute(command: &StorageCommand, app: &OfflineApp) -> Result<Value> {
             serde_json::to_value(report).map_err(|_| WikiError::invalid("storage result encoding"))
         }
     }
+}
+
+pub(super) fn present_migration(
+    data: &Value,
+    output: &mut impl std::io::Write,
+) -> std::io::Result<()> {
+    if data.get("plan_hash").is_some() {
+        writeln!(output, "Preview only. No files were changed.")?;
+        if data["from_layout"] == 3 {
+            return writeln!(output, "Your sources are already organized for Obsidian.");
+        }
+        if data["complete"] == false {
+            writeln!(
+                output,
+                "The preview could not check every file. Resolve the issues below before migrating."
+            )?;
+        }
+        writeln!(
+            output,
+            "Sources to organize: {}. Historical copies needed for existing links: {}.",
+            data["sources"], data["historical_copies"]
+        )?;
+        writeln!(
+            output,
+            "All notes and history will be preserved, with a full backup before migration."
+        )?;
+        if let Some(blockers) = data["blockers"].as_array() {
+            for blocker in blockers.iter().filter_map(Value::as_str) {
+                writeln!(
+                    output,
+                    "Needs attention: {}",
+                    super::dispatch::terminal_text(blocker, false)
+                )?;
+            }
+        }
+        if let Some(hash) = data["plan_hash"].as_str() {
+            writeln!(output, "Plan: {hash}")?;
+        }
+    } else {
+        if data["backup"].is_null() {
+            return writeln!(
+                output,
+                "Your sources are already organized for Obsidian. No migration is needed."
+            );
+        }
+        writeln!(output, "Sources are organized for browsing in Obsidian.")?;
+        writeln!(
+            output,
+            "Sources: {}. Saved historical copies: {}.",
+            data["sources"], data["historical_copies"]
+        )?;
+        if let Some(backup) = data["backup"].as_str() {
+            writeln!(
+                output,
+                "Full backup: {}",
+                super::dispatch::terminal_text(backup, false)
+            )?;
+        }
+    }
+    Ok(())
 }

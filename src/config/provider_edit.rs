@@ -9,7 +9,7 @@ use super::{
         SetupAuth, append_automatic_embedding_grant, auth_table, dimensions_value, encode_document,
         insert_exact, invalid, parse_document,
     },
-    providers::{AutomaticEmbeddingConsent, ProviderAutomaticEmbeddingDecision},
+    providers::{AutomaticEmbeddingConsent, ProviderAutomaticEmbeddingDecision, ReasoningEffort},
 };
 use crate::domain::*;
 use serde::Serialize;
@@ -87,6 +87,8 @@ pub struct ProviderRolePatch {
     pub adapter: Option<ProviderAdapter>,
     pub dimensions: Option<String>,
     pub max_output_tokens: Option<u64>,
+    /// None preserves; Some(None) removes; Some(Some(effort)) sets explicitly.
+    pub reasoning_effort: Option<Option<ReasoningEffort>>,
     pub auth: ProviderAuthPatch,
 }
 
@@ -99,6 +101,7 @@ impl ProviderRolePatch {
             adapter: None,
             dimensions: None,
             max_output_tokens: None,
+            reasoning_effort: None,
             auth: ProviderAuthPatch::Preserve,
         }
     }
@@ -109,6 +112,7 @@ impl ProviderRolePatch {
             && self.adapter.is_none()
             && self.dimensions.is_none()
             && self.max_output_tokens.is_none()
+            && self.reasoning_effort.is_none()
             && matches!(self.auth, ProviderAuthPatch::Preserve)
     }
 }
@@ -130,6 +134,7 @@ pub struct GenerationSetup {
     pub adapter: ProviderAdapter,
     pub auth: SetupAuth,
     pub max_output_tokens: Option<u64>,
+    pub reasoning_effort: Option<Option<ReasoningEffort>>,
 }
 
 impl GenerationSetup {
@@ -141,6 +146,7 @@ impl GenerationSetup {
             adapter: Some(self.adapter),
             dimensions: None,
             max_output_tokens: self.max_output_tokens,
+            reasoning_effort: self.reasoning_effort,
             auth: ProviderAuthPatch::Replace(self.auth),
         }
     }
@@ -164,6 +170,7 @@ pub enum ProviderField {
     Adapter,
     Dimensions,
     MaxOutputTokens,
+    ReasoningEffort,
     Auth,
 }
 
@@ -175,17 +182,19 @@ impl ProviderField {
             Self::Adapter => "adapter",
             Self::Dimensions => "dimensions",
             Self::MaxOutputTokens => "max_output_tokens",
+            Self::ReasoningEffort => "reasoning_effort",
             Self::Auth => "auth",
         }
     }
 }
 
-const FIELDS: [ProviderField; 6] = [
+const FIELDS: [ProviderField; 7] = [
     ProviderField::Model,
     ProviderField::Url,
     ProviderField::Adapter,
     ProviderField::Dimensions,
     ProviderField::MaxOutputTokens,
+    ProviderField::ReasoningEffort,
     ProviderField::Auth,
 ];
 
@@ -234,6 +243,7 @@ pub struct ProviderRoleSummary {
     pub adapter: ProviderAdapter,
     pub dimensions: Option<String>,
     pub effective_output_token_limit: Option<u64>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub destination: ProviderDestination,
     pub auth_source: String,
     pub command_auth: Option<ProviderCommandSummary>,
@@ -548,6 +558,15 @@ fn role_summary(
         dimensions: dimensions(service),
         effective_output_token_limit: (role == ProviderRole::Generation)
             .then(|| normal["max_output_tokens"].as_integer().unwrap_or_default() as u64),
+        reasoning_effort: service
+            .get("reasoning_effort")
+            .cloned()
+            .map(|value| {
+                value
+                    .try_into()
+                    .map_err(|_| invalid("invalid reasoning effort"))
+            })
+            .transpose()?,
         destination: ProviderDestination {
             scheme: endpoint.scheme().into(),
             host: endpoint.host_str().unwrap_or_default().into(),
@@ -618,7 +637,8 @@ pub fn plan_provider_edit_with_automatic(
         if patch
             .adapter
             .is_some_and(|adapter| adapter.role() != patch.role)
-            || (patch.role == ProviderRole::Embedding && patch.max_output_tokens.is_some())
+            || (patch.role == ProviderRole::Embedding
+                && (patch.max_output_tokens.is_some() || patch.reasoning_effort.is_some()))
             || (patch.role == ProviderRole::Generation && patch.dimensions.is_some())
         {
             return Err(invalid(
@@ -681,6 +701,16 @@ pub fn plan_provider_edit_with_automatic(
             }
             if let Some(dimensions) = &patch.dimensions {
                 service.insert("dimensions".into(), dimensions_value(dimensions)?);
+            }
+            if let Some(effort) = patch.reasoning_effort {
+                if let Some(effort) = effort {
+                    service.insert(
+                        "reasoning_effort".into(),
+                        Value::String(effort.as_str().into()),
+                    );
+                } else {
+                    service.remove("reasoning_effort");
+                }
             }
             if let Some(limit) = patch.max_output_tokens {
                 let limit = i64::try_from(limit).map_err(|_| {

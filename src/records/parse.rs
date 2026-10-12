@@ -55,7 +55,7 @@ impl ParsedNote {
 }
 /// Versions the validation/range rules independently of cache SQL.
 pub fn parser_fingerprint() -> Blake3Hash {
-    Blake3Hash::digest(b"lwiki-lossless-v2;yaml-rust2=0.13.0;pulldown-cmark=0.13.4;utf8-char-markers;yaml-core-exact-i64-u64-radix;iterative-depth;default-envelope=262144;default-depth=32;scalar-inline-edit-v1;suspected-leading-envelope-v1")
+    Blake3Hash::digest(b"lwiki-lossless-v2;yaml-rust2=0.13.0;pulldown-cmark=0.13.4;utf8-char-markers;yaml-core-exact-i64-u64-radix;iterative-depth;default-envelope=262144;default-depth=32;scalar-inline-edit-v1;suspected-leading-envelope-v1;vault-schema3-source-presentation-v1")
 }
 pub fn parse_note(raw: &[u8]) -> ParsedNote {
     parse_note_with_limits(raw, ParseLimits::default())
@@ -147,7 +147,7 @@ pub fn parse_note_with_limits(raw: &[u8], limits: ParseLimits) -> ParsedNote {
                 .and_then(Value::as_str)
                 .is_some_and(|s| {
                     s != "1"
-                        && !(s == "2"
+                        && !(matches!(s, "2" | "3")
                             && fields.get("wiki_kind").and_then(Value::as_str) == Some("vault"))
                 })
             {

@@ -244,6 +244,16 @@ Commands that submit joined maintenance jobs also return optional `meta.maintena
 
 Commands without a vault/index use null for those metadata fields. An internal search hit serializes `record_ref`, path, title, kind, authored status, eligibility, excerpt, source/evidence references, and retrieval reasons. Scores are labeled by channel; no unexplained cross-channel numeric score is exposed as confidence. Graph hits add seed, directed path, predicate/qualifiers, support, contradictions, and coverage. Citation references are tagged `source` for a direct `SourceSpanRef`, or `assertion` for an `EvidenceRef`. Both preserve source/revision, byte span, and quote hash; assertion citations additionally carry the evidence/assertion IDs. Ordinary note excerpts remain labeled note text, not fabricated source evidence.
 
+Page search hits may also include `declared_source_refs`, copied from the page's
+owned citation block. These are declarations used to group duplicate displayed
+text, not newly verified evidence. They do not give an uncited excerpt citation
+authority or change the hit's freshness. Human output may group a page with a
+captured source only when the declared reference matches the exact source,
+revision, span and hash, all displayed source text is present in the page's
+displayed excerpts, and their eligibility agrees. JSON keeps every hit, its
+ranking and its continuation cursor. `--verbose` shows internal paths and
+diagnostics omitted from ordinary human output.
+
 Failures use the same envelope with `ok: false` and `error: {code, message, retryable, hint, details}`. `data` is normally null, but may contain a preserved run/change ID and partial outcome. Details are typed per code and redact secrets, helper output, provider bodies, and sensitive URLs. User paths may be displayed; credential file contents may not.
 
 JSONL supports long-running commands only. Each line has `schema_version`, invocation ID, monotonically increasing sequence, event type, and typed data. Events include `started`, `progress`, `checkpoint`, `warning`, and `completed`; `completed` embeds the normal envelope and is the terminal event when orderly shutdown is possible. SIGKILL or an I/O failure can prevent it, so absence means unknown/incomplete, not success. Streaming events are presentation; durable job events remain the recovery authority.

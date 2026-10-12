@@ -86,6 +86,7 @@ pub const COMMANDS: &[&str] = &[
     "storage inventory",
     "storage plan",
     "storage cleanup",
+    "storage migrate",
     "changes show",
     "changes apply",
     "changes abort",
@@ -441,9 +442,10 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             if *set_default {
                 config::local::require_write_target(&local)?;
             }
-            let outcome = crate::app::offline::init_with_existing(
+            let outcome = crate::app::offline::init_with_title_intent(
                 path,
-                title,
+                title.as_deref(),
+                "Local wiki",
                 *existing,
                 operation_options(args, args.offline, args.lock_timeout_ms.unwrap_or(5000)),
             )?;
@@ -3330,6 +3332,17 @@ pub fn present_with_wiki(
     output: &mut impl Write,
     wiki: Option<&Path>,
 ) -> io::Result<()> {
+    present_detailed(envelope, format, output, wiki, false)
+}
+
+/// Present optional diagnostic detail without changing the machine result.
+pub fn present_detailed(
+    envelope: &Envelope,
+    format: OutputFormat,
+    output: &mut impl Write,
+    wiki: Option<&Path>,
+    verbose: bool,
+) -> io::Result<()> {
     let _diagnostic_finish = crate::maintenance_diagnostic::Finish;
     crate::maintenance_diagnostic::observe(crate::maintenance_diagnostic::Phase::Output, || {
         if matches!(format, OutputFormat::Human)
@@ -3340,14 +3353,14 @@ pub fn present_with_wiki(
                 ))
         {
             let mut bytes = Vec::new();
-            present_inner(envelope, format, &mut bytes, wiki)?;
+            present_inner(envelope, format, &mut bytes, wiki, verbose)?;
             write!(
                 output,
                 "{}",
                 terminal_text(&String::from_utf8_lossy(&bytes), true)
             )
         } else {
-            present_inner(envelope, format, output, wiki)
+            present_inner(envelope, format, output, wiki, verbose)
         }
     })
 }
@@ -3371,6 +3384,7 @@ fn present_inner(
     format: OutputFormat,
     output: &mut impl Write,
     wiki: Option<&Path>,
+    verbose: bool,
 ) -> io::Result<()> {
     let command_prefix = wiki.map_or_else(
         || "lwiki".to_owned(),
@@ -3382,6 +3396,7 @@ fn present_inner(
         },
     );
     if format == OutputFormat::Human
+        && envelope.command != "search"
         && let Some(status) = envelope.data.get("automatic_embeddings")
     {
         super::automatic_embeddings::present(status, output)?;
@@ -3649,63 +3664,20 @@ fn present_inner(
             serde_json::to_writer_pretty(&mut *output, &envelope.data["packet"])?;
             writeln!(output)
         }
+        OutputFormat::Human
+            if matches!(
+                envelope.command.as_str(),
+                "graph import" | "graph resolve" | "graph review" | "graph extract"
+            ) =>
+        {
+            super::graph_status::present(envelope, output, &command_prefix)
+        }
         OutputFormat::Human if envelope.command == "search" => {
-            if let Some(hits) = envelope.data["hits"].as_array() {
-                if let Some(freshness) = &envelope.meta.freshness {
-                    writeln!(
-                        output,
-                        "Freshness: {freshness}{}",
-                        envelope
-                            .meta
-                            .verified_at
-                            .as_ref()
-                            .map(|at| format!(" at {at}"))
-                            .unwrap_or_else(|| " (unverified)".into())
-                    )?;
-                }
-                for hit in hits {
-                    writeln!(
-                        output,
-                        "{} — {} ({})\n{}\n",
-                        terminal_text(hit["path"].as_str().unwrap_or_default(), false),
-                        terminal_text(hit["title"].as_str().unwrap_or_default(), false),
-                        hit["eligibility"].as_str().unwrap_or_default(),
-                        hit["excerpt"]["text"].as_str().unwrap_or_default()
-                    )?;
-                    if hit["excerpt"]["citation"]["kind"] == "source" {
-                        let reference = &hit["excerpt"]["citation"]["reference"];
-                        writeln!(
-                            output,
-                            "Source: {} revision {} bytes {}..{}\nQuote hash: {}\n",
-                            reference["source_id"].as_str().unwrap_or_default(),
-                            reference["source_revision"].as_str().unwrap_or_default(),
-                            reference["span"]["start"],
-                            reference["span"]["end"],
-                            reference["quote_hash"].as_str().unwrap_or_default()
-                        )?;
-                    }
-                }
-                if hits.is_empty() {
-                    writeln!(output, "No matches.")?;
-                }
-                if envelope.meta.partial {
-                    if let Some(cursor) = envelope.data["next_cursor"].as_str() {
-                        writeln!(
-                            output,
-                            "More results: repeat this search with the same options and --cursor '{cursor}'"
-                        )?;
-                    } else {
-                        writeln!(
-                            output,
-                            "Results are truncated by the candidate bound; increase --candidates or narrow the query. No continuation cursor is available."
-                        )?;
-                    }
-                }
-                Ok(())
-            } else {
-                serde_json::to_writer_pretty(&mut *output, &envelope.data)?;
-                writeln!(output)
+            super::search_status::present(envelope, output, verbose)?;
+            if let Some(status) = envelope.data.get("automatic_embeddings") {
+                super::automatic_embeddings::present(status, output)?;
             }
+            Ok(())
         }
         OutputFormat::Human if envelope.command == "init" => {
             let action = if envelope.data["created"] == true {
@@ -3727,6 +3699,9 @@ fn present_inner(
                 output,
                 "Next: add a local file with lwiki --wiki PATH source add FILE, then search its contents."
             )
+        }
+        OutputFormat::Human if envelope.command == "storage migrate" => {
+            super::storage::present_migration(&envelope.data, output)
         }
         OutputFormat::Human if envelope.data["inspection"] == "metadata_summary" => {
             let summary = &envelope.data;

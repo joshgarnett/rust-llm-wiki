@@ -197,6 +197,37 @@ struct RunMarker {
     task_keys: Vec<Blake3Hash>,
     expected_units: Vec<RenderedUnit>,
 }
+fn automatic_scope_hash(
+    operation: &str,
+    space: &Blake3Hash,
+    units: &[RenderedUnit],
+) -> Result<Blake3Hash> {
+    Ok(Blake3Hash::digest(crate::graph::packet::canonical_json(
+        &(
+            "lwiki-automatic-embedding-v1",
+            operation,
+            space,
+            proof(units)?,
+        ),
+    )?))
+}
+
+fn automatic_unstarted_scope(
+    runtime: &EmbeddingRuntime<'_>,
+    inspected: &LedgerInspection,
+    operation: &str,
+    space: &Blake3Hash,
+    units: &[RenderedUnit],
+) -> Result<bool> {
+    let service = runtime.service.summary();
+    Ok(runtime.automatic.is_some()
+        && inspected.spec.scope.operation == operation
+        && inspected.spec.scope.scope_payload_hash.as_ref()
+            == Some(&automatic_scope_hash(operation, space, units)?)
+        && inspected.spec.config_fingerprint == service.config_fingerprint
+        && inspected.spec.scope.profile_fingerprints
+            == BTreeMap::from([(service.profile_id, service.profile_fingerprint)]))
+}
 fn fail(code: ErrorCode, text: &str) -> WikiError {
     WikiError::new(code, text)
 }
@@ -965,11 +996,29 @@ impl OfflineApp {
                         .collect::<Vec<_>>()
                 || inspection.spec.scope.scope_payload_hash.as_ref()
                     != Some(&proof(&marker.expected_units)?)
+                    && inspection.spec.scope.scope_payload_hash.as_ref()
+                        != Some(&automatic_scope_hash(
+                            &marker.operation,
+                            &marker.space,
+                            &marker.expected_units,
+                        )?)
             {
                 return Err(fail(
                     ErrorCode::RecoveryRequired,
                     "retained embedding marker differs from its immutable Run scope",
                 ));
+            }
+            if automatic_unstarted_scope(
+                runtime,
+                &inspection,
+                &marker.operation,
+                &marker.space,
+                &marker.expected_units,
+            )? && ledger.can_close_unstarted_embedding(&inspection.spec)?
+            {
+                // Leave unrelated pending scopes untouched. Exact task planning
+                // below may close this scope before allocating its successor.
+                continue;
             }
             if runtime.automatic.is_some()
                 && matches!(inspection.state, RunState::Paused | RunState::Stopped)
@@ -1793,7 +1842,13 @@ impl OfflineApp {
             tasks.iter().map(|t| &t.key).collect::<Vec<_>>(),
             proof(units)?,
         );
-        let invocation = Blake3Hash::digest(if self.embedding_marker_version(runtime)? == 2 {
+        let invocation = Blake3Hash::digest(if runtime.automatic.is_some() {
+            crate::graph::packet::canonical_json(&(
+                "lwiki-automatic-embedding-job-v1",
+                self.embedding_marker_version(runtime)?,
+                &legacy_identity,
+            ))?
+        } else if self.embedding_marker_version(runtime)? == 2 {
             crate::graph::packet::canonical_json(&(
                 "lwiki-normalized-embedding-job-v2",
                 &legacy_identity,
@@ -1805,7 +1860,8 @@ impl OfflineApp {
             ".wiki/state/embedding-jobs/{}.json",
             invocation.as_str().trim_start_matches("blake3:")
         ))?;
-        if let Some(bytes) = self.embedding_read_for(
+        let mut replaces_run = None;
+        while let Some(bytes) = self.embedding_read_for(
             runtime,
             &marker_path,
             crate::changes::prepare::MAX_PAYLOAD_BYTES,
@@ -1824,103 +1880,123 @@ impl OfflineApp {
             }
             let ledger = self.embedding_ledger_for(runtime, marker.run_id)?;
             let mut inspection = ledger.replay()?.inspection;
-            if runtime.automatic.is_some()
-                && (matches!(
-                    inspection.state,
-                    RunState::Paused | RunState::Stopped | RunState::Failed
-                ) || inspection.attempts.iter().any(|attempt| {
-                    matches!(
-                        attempt.phase,
-                        AttemptPhase::Reserved | AttemptPhase::DispatchIntent
-                    )
-                }))
-            {
-                runtime.automatic_block(&inspection.spec.run_id);
-                return Err(with_embedding_context(
-                    fail(
-                        ErrorCode::RecoveryRequired,
-                        "automatic preparation cannot restart held, failed, paused or stopped work",
-                    ),
-                    serde_json::json!({"run_id":inspection.spec.run_id}),
-                ));
-            }
-            for attempt in &inspection.attempts {
-                if attempt.phase == AttemptPhase::OutputCommitted
-                    && attempt.cache_outputs.is_empty()
-                    && self.embedding_receipt_disposition(attempt)? == OutputDisposition::Rejected
+            let replace_unstarted =
+                automatic_unstarted_scope(runtime, &inspection, operation, &space, units)?
+                    && inspection.spec.tasks == tasks
+                    && ledger.can_close_unstarted_embedding(&inspection.spec)?;
+            if replace_unstarted {
+                runtime.automatic_check_start()?;
+                ledger.close_unstarted_embedding(&inspection.spec)?;
+                replaces_run = Some(inspection.spec.run_id.clone());
+                runtime.automatic_touch(&inspection.spec.run_id);
+                marker_path = VaultRelativePath::new(format!(
+                    ".wiki/state/embedding-jobs/{}-after-{}.json",
+                    invocation.hex(),
+                    inspection.spec.run_id,
+                ))?;
+            } else {
+                if runtime.automatic.is_some()
+                    && (matches!(
+                        inspection.state,
+                        RunState::Paused | RunState::Stopped | RunState::Failed
+                    ) || inspection.attempts.iter().any(|attempt| {
+                        matches!(
+                            attempt.phase,
+                            AttemptPhase::Reserved | AttemptPhase::DispatchIntent
+                        )
+                    }))
                 {
-                    ledger.settle(&attempt.attempt)?;
-                }
-            }
-            inspection = ledger.replay()?.inspection;
-            super::remote::validate_retained_arguments(
-                &inspection,
-                &runtime.limits,
-                runtime.deadline_ms,
-                runtime.requested_limits.as_ref(),
-            )?;
-            let cache = self.embedding_store_for(Some(runtime), None)?;
-            let accounted_missing = !inspection.attempts.is_empty()
-                && inspection
-                    .attempts
-                    .iter()
-                    .all(|a| a.phase == AttemptPhase::Settled)
-                && inspection
-                    .attempts
-                    .iter()
-                    .flat_map(|a| &a.cache_outputs)
-                    .map(|r| cache.verify_ref(r))
-                    .collect::<Result<Vec<_>>>()?
-                    .into_iter()
-                    .any(|valid| !valid);
-            let settled_rejection = inspection.attempts.iter().try_fold(false, |found, a| {
-                if a.phase == AttemptPhase::Settled && a.cache_outputs.is_empty() {
-                    Ok(found
-                        || self.embedding_receipt_disposition(a)? == OutputDisposition::Rejected)
-                } else {
-                    Ok(found)
-                }
-            })?;
-            let retired = accounted_missing
-                || inspection
-                    .attempts
-                    .iter()
-                    .all(|a| a.phase == AttemptPhase::Settled)
-                    && inspection
-                        .attempts
-                        .iter()
-                        .any(|a| a.cache_outputs.is_empty())
-                    && (!probe || settled_rejection);
-            if inspection.state == RunState::Failed {
-                return Err(fail(
-                    ErrorCode::RecoveryRequired,
-                    "rejected embedding scope is terminal; changed inputs require a distinct scope",
-                ));
-            }
-            if inspection.state == RunState::Completed || retired {
-                if runtime.automatic.is_some() {
                     runtime.automatic_block(&inspection.spec.run_id);
                     return Err(with_embedding_context(
                         fail(
                             ErrorCode::RecoveryRequired,
-                            "retained embedding output needs explicit repair; automatic work will not replace its Run",
+                            "automatic preparation cannot restart held, failed, paused or stopped work",
                         ),
                         serde_json::json!({"run_id":inspection.spec.run_id}),
                     ));
                 }
-                marker_path = VaultRelativePath::new(format!(
-                    ".wiki/state/embedding-jobs/{}-{}.json",
-                    invocation.hex(),
-                    uuid::Uuid::now_v7()
-                ))?;
-            } else {
-                if inspection.state == RunState::Planned {
-                    ledger.start()?;
+                for attempt in &inspection.attempts {
+                    if attempt.phase == AttemptPhase::OutputCommitted
+                        && attempt.cache_outputs.is_empty()
+                        && self.embedding_receipt_disposition(attempt)?
+                            == OutputDisposition::Rejected
+                    {
+                        ledger.settle(&attempt.attempt)?;
+                    }
                 }
-                if inspection.state == RunState::Paused || inspection.state == RunState::Stopped {
-                    ledger.resume(None)?;
+                inspection = ledger.replay()?.inspection;
+                super::remote::validate_retained_arguments(
+                    &inspection,
+                    &runtime.limits,
+                    runtime.deadline_ms,
+                    runtime.requested_limits.as_ref(),
+                )?;
+                let cache = self.embedding_store_for(Some(runtime), None)?;
+                let accounted_missing = !inspection.attempts.is_empty()
+                    && inspection
+                        .attempts
+                        .iter()
+                        .all(|a| a.phase == AttemptPhase::Settled)
+                    && inspection
+                        .attempts
+                        .iter()
+                        .flat_map(|a| &a.cache_outputs)
+                        .map(|r| cache.verify_ref(r))
+                        .collect::<Result<Vec<_>>>()?
+                        .into_iter()
+                        .any(|valid| !valid);
+                let settled_rejection =
+                    inspection.attempts.iter().try_fold(false, |found, a| {
+                        if a.phase == AttemptPhase::Settled && a.cache_outputs.is_empty() {
+                            Ok(found
+                                || self.embedding_receipt_disposition(a)?
+                                    == OutputDisposition::Rejected)
+                        } else {
+                            Ok(found)
+                        }
+                    })?;
+                let retired = accounted_missing
+                    || inspection
+                        .attempts
+                        .iter()
+                        .all(|a| a.phase == AttemptPhase::Settled)
+                        && inspection
+                            .attempts
+                            .iter()
+                            .any(|a| a.cache_outputs.is_empty())
+                        && (!probe || settled_rejection);
+                if inspection.state == RunState::Failed {
+                    return Err(fail(
+                        ErrorCode::RecoveryRequired,
+                        "rejected embedding scope is terminal; changed inputs require a distinct scope",
+                    ));
                 }
-                return Ok((ledger, tasks));
+                if inspection.state == RunState::Completed || retired {
+                    if runtime.automatic.is_some() {
+                        runtime.automatic_block(&inspection.spec.run_id);
+                        return Err(with_embedding_context(
+                            fail(
+                                ErrorCode::RecoveryRequired,
+                                "retained embedding output needs explicit repair; automatic work will not replace its Run",
+                            ),
+                            serde_json::json!({"run_id":inspection.spec.run_id}),
+                        ));
+                    }
+                    marker_path = VaultRelativePath::new(format!(
+                        ".wiki/state/embedding-jobs/{}-{}.json",
+                        invocation.hex(),
+                        uuid::Uuid::now_v7()
+                    ))?;
+                } else {
+                    if inspection.state == RunState::Planned {
+                        ledger.start()?;
+                    }
+                    if inspection.state == RunState::Paused || inspection.state == RunState::Stopped
+                    {
+                        ledger.resume(None)?;
+                    }
+                    return Ok((ledger, tasks));
+                }
             }
         }
         let invocation = runtime
@@ -1933,7 +2009,13 @@ impl OfflineApp {
             version: 1,
             run_id: run_id.clone(),
             vault_id: self.vault_id.clone(),
-            title: format!("Explicit {operation}"),
+            title: if let Some(previous) = &replaces_run {
+                format!("Automatic {operation}, replacing unsent Run {previous}")
+            } else if runtime.automatic.is_some() {
+                format!("Automatic {operation}")
+            } else {
+                format!("Explicit {operation}")
+            },
             created_at_utc_ms: now,
             deadline_utc_ms: invocation.deadline_utc_ms(),
             scope: RunScope {
@@ -1947,7 +2029,11 @@ impl OfflineApp {
                     runtime.service.summary().profile_id,
                     runtime.service.summary().profile_fingerprint,
                 )]),
-                scope_payload_hash: Some(proof(units)?),
+                scope_payload_hash: Some(if runtime.automatic.is_some() {
+                    automatic_scope_hash(operation, &space, units)?
+                } else {
+                    proof(units)?
+                }),
             },
             config_fingerprint: runtime.service.summary().config_fingerprint,
             input_fingerprint: Blake3Hash::digest([]),

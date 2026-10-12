@@ -386,6 +386,7 @@ impl<'a> IndexedRefreshSession<'a> {
             after: parts.after,
             rows: parts.delta,
             legacy_page_admission: Some(validated.binding),
+            graph_admission: None,
         };
         super::super::normalized_delta::counted(&delta, ENVELOPE_BYTES)?;
         let bytes =

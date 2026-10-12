@@ -24,6 +24,9 @@ pub struct PageSourceRefs {
     citations: Vec<CitationRef>,
 }
 impl PageSourceRefs {
+    pub(crate) fn citations(&self) -> &[CitationRef] {
+        &self.citations
+    }
     pub fn from_json_slice(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > MAX_SOURCE_REFS_INPUT_BYTES {
             return Err(budget("source references exceed 64 KiB"));
@@ -60,6 +63,66 @@ impl PageSourceRefs {
         }
         Ok(())
     }
+}
+
+pub(crate) fn migration_source_refs(bytes: &[u8]) -> Result<Option<PageSourceRefs>> {
+    let text = std::str::from_utf8(bytes).map_err(|_| WikiError::invalid("Page is not UTF-8"))?;
+    let Some(range) = owned_block(text)? else {
+        return Ok(None);
+    };
+    let normalized = text[range].replace("\r\n", "\n");
+    let block = normalized.as_str();
+    let encoded = if let Some(start) = block.find("```json\n") {
+        let rest = &block[start + "```json\n".len()..];
+        rest.split_once("\n```").map(|(json, _)| json)
+    } else if let Some(start) = block.find("<!--\n{") {
+        block[start + "<!--\n".len()..]
+            .split_once("\n-->")
+            .map(|(json, _)| json)
+    } else {
+        None
+    }
+    .ok_or_else(|| {
+        WikiError::invalid("owned source citation block lacks supported exact references")
+    })?;
+    Ok(Some(PageSourceRefs::from_json_slice(encoded.as_bytes())?))
+}
+
+/// Source title, capture timestamp, navigation and citation state.
+type CitationMigrationTarget = (
+    String,
+    String,
+    crate::sources::presentation::SourceNavigation,
+    CitationState,
+);
+type CitationMigrationResolver<'a> =
+    dyn FnMut(&SourceSpanRef) -> Result<CitationMigrationTarget> + 'a;
+
+pub(crate) fn migrate_source_citation_block(
+    page: &VaultRelativePath,
+    bytes: &[u8],
+    target: &mut CitationMigrationResolver<'_>,
+) -> Result<Vec<u8>> {
+    let Some(refs) = migration_source_refs(bytes)? else {
+        return Ok(bytes.to_vec());
+    };
+    let text = std::str::from_utf8(bytes).map_err(|_| WikiError::invalid("Page is not UTF-8"))?;
+    let mut presentations = Vec::new();
+    for citation in refs.citations() {
+        let (source_title, captured_at, navigation, state) = target(source_reference(citation)?)?;
+        presentations.push(CitationPresentation {
+            source_title,
+            content_path: navigation.current_path,
+            capture_anchor: Some(navigation.capture_anchor),
+            captured_at,
+            state,
+        });
+    }
+    replace_block(
+        text,
+        owned_block(text)?,
+        &render_block(page, &refs, &presentations)?,
+    )
 }
 impl<'de> Deserialize<'de> for PageSourceRefs {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
@@ -132,10 +195,136 @@ fn source_reference(citation: &CitationRef) -> Result<&SourceSpanRef> {
 struct CitationPresentation {
     source_title: String,
     content_path: VaultRelativePath,
+    capture_anchor: Option<String>,
+    captured_at: String,
     state: CitationState,
 }
 
 impl OfflineApp {
+    fn plan_citation_presentations(
+        &self,
+        refs: &PageSourceRefs,
+        presentations: &mut [CitationPresentation],
+        guards: &mut Vec<ReadDependency>,
+    ) -> Result<(
+        Vec<crate::changes::ExpectedWrite>,
+        Vec<crate::changes::indexed_refresh::IndexedSourcePresentationTarget>,
+    )> {
+        use crate::{
+            records::{edit_note, parse_note},
+            sources::presentation_planning,
+        };
+        use std::collections::BTreeSet;
+        let mut requested = BTreeMap::<RecordId, BTreeSet<RecordId>>::new();
+        for citation in &refs.citations {
+            let reference = source_reference(citation)?;
+            requested
+                .entry(reference.source_id.clone())
+                .or_default()
+                .insert(reference.source_revision.clone());
+        }
+        let mut expected: BTreeMap<_, _> = guards
+            .iter()
+            .map(|guard| (guard.path.clone(), guard.expected.clone()))
+            .collect();
+        let mut operations = Vec::new();
+        let mut sources = Vec::new();
+        for (source_id, revisions) in requested {
+            let path = VaultRelativePath::new(format!("sources/{source_id}/source.md"))?;
+            let bytes = crate::changes::prepare::read_bounded(&self.fs, &path, 1024 * 1024)?
+                .ok_or_else(|| integrity("citation Source is missing"))?;
+            let note = parse_note(&bytes);
+            if expected.get(&path) != Some(&ExpectedState::Hash(note.source_hash.clone())) {
+                return Err(integrity(
+                    "citation Source changed after exact citation verification",
+                ));
+            }
+            let source = presentation_planning::proposed_source(&note, &BTreeMap::new())?;
+            let planned = presentation_planning::plan_change(
+                &source,
+                note.body(),
+                Some(&note),
+                &[],
+                &revisions,
+                &mut |path, maximum| {
+                    crate::vault::fs::read_regular_bounded(
+                        self.fs.root(),
+                        path,
+                        false,
+                        maximum,
+                        "saved-note",
+                    )
+                },
+            )?;
+            for dependency in planned
+                .dependencies
+                .iter()
+                .chain(&planned.plan.dependencies)
+            {
+                if expected
+                    .insert(dependency.path.clone(), dependency.expected.clone())
+                    .is_some_and(|prior| prior != dependency.expected)
+                {
+                    return Err(integrity(
+                        "citation presentation dependency changed during planning",
+                    ));
+                }
+            }
+            for (citation, presentation) in refs.citations.iter().zip(presentations.iter_mut()) {
+                let reference = source_reference(citation)?;
+                if reference.source_id == source_id {
+                    let navigation = planned
+                        .plan
+                        .navigation
+                        .get(&reference.source_revision)
+                        .ok_or_else(|| {
+                            integrity("citation has no authenticated saved-copy target")
+                        })?;
+                    presentation.content_path = navigation.current_path.clone();
+                    presentation.capture_anchor = Some(navigation.capture_anchor.clone());
+                }
+            }
+            let bytes = edit_note(
+                &note,
+                &BTreeMap::from([(
+                    "wiki_presentation".into(),
+                    planned.plan.metadata.encode()?.into(),
+                )]),
+                None,
+                &note.source_hash,
+            )?;
+            if bytes != note.raw {
+                let after = planned
+                    .plan
+                    .writes
+                    .iter()
+                    .map(|operation| operation.target.clone())
+                    .collect();
+                operations.extend(planned.plan.writes);
+                operations.push(crate::changes::ExpectedWrite {
+                    target: path,
+                    expected: ExpectedState::Hash(note.source_hash),
+                    proposed: Some(bytes),
+                    apply_after: after,
+                });
+                sources.push(
+                    crate::changes::indexed_refresh::IndexedSourcePresentationTarget {
+                        source_id,
+                        revisions: revisions.into_iter().collect(),
+                    },
+                );
+            } else if !planned.plan.writes.is_empty() {
+                return Err(integrity(
+                    "saved-copy writes changed without Source ownership update",
+                ));
+            }
+        }
+        *guards = expected
+            .into_iter()
+            .map(|(path, expected)| ReadDependency { path, expected })
+            .collect();
+        Ok((operations, sources))
+    }
     pub fn page_initialize_with_source_refs(
         &self,
         path: Option<VaultRelativePath>,
@@ -168,13 +357,25 @@ impl OfflineApp {
         let text = std::str::from_utf8(proposal)
             .map_err(|_| WikiError::invalid("Page proposal is not UTF-8"))?;
         let owned = owned_block(text)?;
-        let (presentations, read_preconditions) = if refs.is_empty() {
+        let (mut presentations, mut read_preconditions) = if refs.is_empty() {
             (Vec::new(), Vec::new())
         } else if self.catalog().operation_state()?.is_some() {
             self.selected_page_citations(&refs)?
         } else {
             self.legacy_page_citations(&refs)?
         };
+        let (mut presentation_operations, presentation_sources) =
+            if crate::storage::layout::layout_kind(self.fs.root())?
+                == crate::storage::layout::LayoutKind::ReadableSources
+            {
+                self.plan_citation_presentations(
+                    &refs,
+                    &mut presentations,
+                    &mut read_preconditions,
+                )?
+            } else {
+                (Vec::new(), Vec::new())
+            };
         let generated = render_block(&path, &refs, &presentations)?;
         let rendered = replace_block(text, owned, &generated)?;
         let rendered_text = std::str::from_utf8(&rendered)
@@ -185,14 +386,22 @@ impl OfflineApp {
             ));
         }
         operation.proposed = Some(rendered);
-        self.execute_page_draft(ChangeDraft {
-            title: "Put page".into(),
-            origin: None,
-            inverse_of: None,
-            allocated_ids: BTreeMap::new(),
-            read_preconditions,
-            operations: vec![operation],
-        })
+        operation.apply_after = presentation_operations
+            .iter()
+            .map(|op| op.target.clone())
+            .collect();
+        presentation_operations.push(operation);
+        self.execute_cited_page_draft(
+            ChangeDraft {
+                title: "Put page".into(),
+                origin: None,
+                inverse_of: None,
+                allocated_ids: BTreeMap::new(),
+                read_preconditions,
+                operations: presentation_operations,
+            },
+            presentation_sources,
+        )
     }
 
     fn selected_page_citations(
@@ -269,6 +478,12 @@ impl OfflineApp {
             presentations.push(CitationPresentation {
                 source_title: source.record.title().to_owned(),
                 content_path,
+                capture_anchor: None,
+                captured_at: revision
+                    .record
+                    .string("wiki_captured_at")
+                    .unwrap_or_default()
+                    .to_owned(),
                 state,
             });
         }
@@ -339,6 +554,11 @@ impl OfflineApp {
             presentations.push(CitationPresentation {
                 source_title: source.title().to_owned(),
                 content_path,
+                capture_anchor: None,
+                captured_at: revision
+                    .string("wiki_captured_at")
+                    .unwrap_or_default()
+                    .to_owned(),
                 state: observed_state(source, reference),
             });
         }
@@ -509,8 +729,18 @@ fn render_block(
     }
     let mut block = format!("{BEGIN}\n\n### Sources\n\n");
     for (index, presentation) in presentations.iter().enumerate() {
-        let content = SourceLink::relative(page, &presentation.content_path)?;
-        let title = markdown_link_title(&presentation.source_title);
+        let mut content = SourceLink::relative(page, &presentation.content_path)?;
+        if let Some(anchor) = &presentation.capture_anchor {
+            content.0.push_str(&format!("#^{anchor}"));
+        }
+        let title = markdown_link_title(&if presentation.capture_anchor.is_some() {
+            format!(
+                "{}: Saved copy from {}",
+                presentation.source_title, presentation.captured_at
+            )
+        } else {
+            presentation.source_title.clone()
+        });
         let status = match presentation.state {
             CitationState::Current => "",
             CitationState::Historical => " (older saved copy)",
@@ -666,6 +896,11 @@ pub(crate) fn rebase_source_citation_links(
                 "generated source link is not an in-vault relative path",
             ));
         }
+        let (decoded, fragment) = decoded
+            .split_once('#')
+            .map_or((decoded, String::new()), |(path, fragment)| {
+                (path, format!("#{fragment}"))
+            });
         let mut target: Vec<_> = from.as_str().split('/').collect();
         target.pop();
         for component in decoded.split('/') {
@@ -685,12 +920,12 @@ pub(crate) fn rebase_source_citation_links(
             }
         }
         let target = VaultRelativePath::new(target.join("/"))?;
-        if SourceLink::relative(from, &target)?.0 != link.destination {
+        if format!("{}{}", SourceLink::relative(from, &target)?.0, fragment) != link.destination {
             return Err(WikiError::invalid(
                 "source link is not a canonical generated destination",
             ));
         }
-        let replacement = SourceLink::relative(to, &target)?.0;
+        let replacement = format!("{}{}", SourceLink::relative(to, &target)?.0, fragment);
         edits.push((
             range.start + link.range.start + at..range.start + link.range.end - 1,
             replacement,

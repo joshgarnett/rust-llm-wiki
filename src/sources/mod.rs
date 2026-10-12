@@ -9,6 +9,8 @@ pub(crate) mod indexed_refresh;
 pub mod lifecycle;
 pub(crate) mod local_text;
 mod lookup;
+pub(crate) mod presentation;
+pub(crate) mod presentation_planning;
 pub(crate) use lookup::SourceNotes;
 pub mod revision;
 pub(crate) mod selected;

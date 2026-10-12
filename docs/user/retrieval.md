@@ -88,21 +88,13 @@ your agent may count them differently. Read warnings and omissions as well as
 the passages. If using JSON, `data.text` is the rendered evidence; the full
 response also includes metadata and may repeat passages.
 
-For explicit control on normalized indexes, `--scope indexed-documents`
-searches the saved index and checks the selected files.
-`--scope indexed-evidence --mode lexical` searches only indexed captured sources
-without syncing. `--include-historical` can include
-earlier captured versions in literal or word context; read their labels before
-using them as current facts. Historical semantic and hybrid selection are
-unsupported.
+Check warnings before treating a result as current. If a lookup says newer notes
+may be missing, run `lwiki index sync` from a session with write access and search
+again. After changing an original note outside the wiki, capture it again to save
+the updated text.
 
-Ordinary local context checks current notes when the wiki fits its read limits.
-If it uses the saved index instead, its warnings explain that choice.
-Explicit `--scope current` requires the current check and fails if it cannot
-complete within those limits. Snapshot context and `read --no-sync` use cached
-text without current source citations. They are useful for inspection, not for
-claiming the text is current. `--no-sync` is not a workaround for denied write
-access; ordinary local lookup is the read-only route.
+For an earlier saved copy, use the revision option in the next section. Check its
+date and status before using it to describe the present.
 
 ## Read an exact captured range
 
@@ -143,6 +135,60 @@ Search positions for authored pages can count from the whole file. Use
 [inspect](everyday-use.md#inspect-and-edit-exact-bytes) for physical file positions,
 and do not copy one kind of position into the other.
 
+## Extract and review relationships
+
+Ask your connected agent to turn a selected note into relationships you can look
+up and check against the original text. For example:
+
+> Capture my meeting note at `/absolute/path/to/meeting.md`. Extract its people,
+> organizations and relationships. Show the proposed claims and their quoted
+> support, keep similar names separate, and save only claims the note supports.
+> Then show me the relationships around Ada.
+
+Your agent saves a copy it can cite, proposes relationships, identifies the people
+and organizations, and checks each claim against its quoted evidence before
+accepting it. Ask for proposals only if you want to inspect them before acceptance.
+The result should name the saved relationships, quote their support, and report
+uncertain identities, unsupported claims or omitted text. A similar name does not
+establish that two people are the same person.
+
+Choose how to produce the proposals:
+
+| Choice | What you need | What happens |
+| --- | --- | --- |
+| Your connected agent | The agent installed during setup and a selected note | Your agent reads the saved note and proposes relationships. No separate generation service is needed. |
+| A generation API | A [configured generation model](sources-and-providers.md#add-an-optional-generation-model) and permission for explicit requests | lwiki sends the selected captured text to that service within your request limits and stages its proposals. Your agent still resolves identities and reviews the evidence. |
+
+The agent route is the default. lwiki does not launch an agent itself. `--offline`
+prevents lwiki's provider requests; your connected agent uses its own model and
+account. Embeddings help search by meaning and cannot extract relationships.
+
+For the API route, ask your agent to use your configured generation service with
+a stated request limit. One short selected note can use:
+
+```sh
+lwiki --json graph extract --executor api --source-id SOURCE_ID --max-requests 1 --max-output-tokens 4096
+```
+
+Replace `SOURCE_ID` with the ID returned by capture. Keep the output allowance
+within the saved service cap. The command proposes relationships for review.
+Your agent then checks who each name refers to and reads the supporting and
+contradicting passages before saving supported relationships. Ask it to report
+the saved relationships, their citations and anything it could not resolve.
+
+Your agent follows the [graph cookbook](../../skills/llm-wiki/references/workflows.md#extract-and-review-relationships).
+You do not need to prepare its JSON requests yourself.
+
+An API failure can still use paid tokens. Keep the reported run ID and inspect
+`lwiki jobs status --run RUN_ID` before retrying. A reasoning model can consume its
+output allowance before returning proposals; follow the reported limit adjustment.
+Your [reasoning effort choice](sources-and-providers.md#choose-reasoning-effort)
+controls thinking effort and does not increase that allowance.
+
+After review, inspect a saved entity's neighbors as shown below. Read the quoted
+passages before using a relationship in an answer. Partial extraction is useful,
+but it does not mean every relationship in your wiki has been found.
+
 ## Inspect named neighbors
 
 If your wiki contains reviewed entities and relationships, find an entity and
@@ -165,35 +211,9 @@ you need more detail. `--no-sync` returns cached relationships without citations
 add `--verify-selected` to check the selected evidence. General graph queries
 and historical graph views are unavailable on normalized storage.
 
-## Select passages with a host
+## Find missing details
 
-An agent can help choose complementary passages when automatic context misses
-facts. This advanced route prepares a selection task, lets your agent choose
-from it, then verifies the original text. lwiki does not call the agent for you.
-
-On a normalized index, prepare the task:
-
-```sh
-lwiki --offline context 'Which steps and exceptions apply?' --mode lexical --scope indexed-documents --limit 5 --candidates 80 --max-bytes 6000 --max-tokens 1500 --prepare-selection > selection-task.json
-```
-
-Give the successful task output to your agent and ask for a reply matching
-`lwiki schema context-selection`. Save that reply as `selection-reply.json`.
-If you used `--json`, give the agent only
-`data.selection_packet.selector_input`. Then repeat the same question, filters
-and limits with the reply:
-
-```sh
-lwiki --offline context 'Which steps and exceptions apply?' --mode lexical --scope indexed-documents --limit 5 --candidates 80 --max-bytes 6000 --max-tokens 1500 --selection selection-reply.json
-```
-
-The reply chooses supplied passage IDs; it must keep the task fingerprint
-unchanged. If the evidence changed, prepare a new task. Check the final passages
-and any omissions before asking for an answer. Selection still uses the output
-limits and cannot guarantee a complete answer.
-
-For an agent to choose ranges from complete original notes instead, use
-`--prepare-original-selection --discover-originals`, then replay with
-`--discover-originals --selection REPLY.json`. Inspect
-`schema context-original-selection-auto` for that reply format. Keep this
-separate from passage selection; their replies are not interchangeable.
+If the first passages miss an important condition or exception, ask your agent
+to search for that detail and read more of the relevant notes. It can use the
+[advanced retrieval workflow](../../skills/llm-wiki/references/workflows.md#advanced-retrieval-and-embedding-preparation)
+when ordinary context is insufficient.

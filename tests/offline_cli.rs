@@ -890,12 +890,38 @@ fn source_cli_refresh_preserves_title_and_searches_only_current_payload() {
         .iter()
         .filter_map(|hit| hit["path"].as_str())
         .collect();
-    assert!(paths.iter().any(|path| path.ends_with("/source.md")));
     assert!(
         paths
             .iter()
-            .any(|path| path.ends_with(&format!("revisions/{current_revision}/revision.md")))
+            .all(|path| !path.ends_with("/source.md") && !path.ends_with("/revision.md"))
     );
+    for (kind, suffix) in [
+        ("source", "/source.md".to_owned()),
+        (
+            "revision",
+            format!("revisions/{current_revision}/revision.md"),
+        ),
+    ] {
+        let inspected = ok(
+            root,
+            &[
+                "search",
+                "Stable source title",
+                "--mode",
+                "literal",
+                "--kind",
+                kind,
+            ],
+            None,
+        );
+        assert!(
+            inspected["data"]["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|hit| hit["path"].as_str().unwrap().ends_with(&suffix))
+        );
+    }
     let explicit = ok(
         root,
         &[
@@ -1098,7 +1124,7 @@ fn retained_apply_failure_returns_inspectable_change_and_human_snapshot_is_label
     assert!(
         String::from_utf8(search.stdout)
             .unwrap()
-            .contains("index_snapshot (unverified)")
+            .contains("Results from the saved index; note freshness has not been checked.")
     );
     let read = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .arg("--wiki")
@@ -1334,7 +1360,10 @@ fn human_search_pagination_and_input_errors_offer_executable_recovery() {
     let hit_path = |output: &str| {
         let paths: Vec<_> = output
             .lines()
-            .filter_map(|line| line.split_once(" — ").map(|(path, _)| path.to_owned()))
+            .filter_map(|line| {
+                line.strip_prefix("Page: ")
+                    .and_then(|line| line.rsplit_once(" (").map(|(path, _)| path.to_owned()))
+            })
             .collect();
         assert_eq!(paths.len(), 1, "expected one search hit: {output}");
         paths.into_iter().next().unwrap()

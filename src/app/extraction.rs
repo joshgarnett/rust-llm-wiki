@@ -75,7 +75,11 @@ impl OfflineApp {
                 self.fs.root(),
                 Duration::from_millis(self.options.lock_timeout_ms),
             )?;
-            engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
+            if catalog.operation_state()?.is_some() {
+                engine.recover_indexed(&writer, &catalog)?;
+            } else {
+                engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
+            }
             catalog.guard_current(None)?;
             Some(writer)
         };
@@ -97,14 +101,24 @@ impl OfflineApp {
         let writer = writer.as_ref().expect("normal export writer");
         if let Some(draft) = plan.draft {
             let retained_change = engine.prepare(writer, draft)?;
-            let applied = engine
-                .apply(
+            let applied = if catalog.operation_state()?.is_some() {
+                let mut session =
+                    crate::catalog::source_refresh::IndexedRefreshSession::adopt_graph(
+                        &catalog,
+                        writer,
+                        &retained_change.prepared,
+                    )
+                    .map_err(|e| retained(e, &retained_change.prepared))?;
+                engine.apply_indexed_refresh(writer, &mut session)
+            } else {
+                engine.apply(
                     writer,
                     &retained_change.prepared,
                     &CatalogGraphValidator,
                     &catalog,
                 )
-                .map_err(|e| retained(e, &retained_change.prepared))?;
+            }
+            .map_err(|e| retained(e, &retained_change.prepared))?;
             outcome.change = Some(applied.change);
             outcome.snapshot = applied.snapshot;
         } else {
@@ -142,7 +156,11 @@ impl OfflineApp {
                 self.fs.root(),
                 Duration::from_millis(self.options.lock_timeout_ms),
             )?;
-            engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
+            if catalog.operation_state()?.is_some() {
+                engine.recover_indexed(&writer, &catalog)?;
+            } else {
+                engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
+            }
             catalog.guard_current(None)?;
             Some(writer)
         };

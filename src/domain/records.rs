@@ -16,11 +16,12 @@ impl CanonicalRecord {
     pub fn new(fields: BTreeMap<String, Value>) -> Result<Self> {
         let schema = required_string(&fields, "wiki_schema")?;
         if schema != "1"
-            && !(schema == "2" && fields.get("wiki_kind").and_then(Value::as_str) == Some("vault"))
+            && !(matches!(schema, "2" | "3")
+                && fields.get("wiki_kind").and_then(Value::as_str) == Some("vault"))
         {
             return Err(field_error(
                 "wiki_schema",
-                "must equal the string \"1\" (vault markers also support storage layout \"2\")",
+                "must equal the string \"1\" (vault markers also support storage layouts \"2\" and \"3\")",
             ));
         }
         let id = RecordId::new(required_string(&fields, "wiki_id")?)?;
@@ -126,6 +127,11 @@ impl CanonicalRecord {
             _ => {}
         }
         let record = Self { fields, id, kind };
+        if let Some(presentation) =
+            super::source_presentation::SourcePresentation::from_record(&record)?
+        {
+            presentation.validate_owner(&record)?;
+        }
         validate_status(&record)?;
         Ok(record)
     }
@@ -212,7 +218,7 @@ fn kind_fields(kind: RecordKind) -> (&'static [&'static str], &'static [&'static
                 "current_revision",
                 "revisions",
             ],
-            &["withdrawn_at", "withdrawal_reason"],
+            &["withdrawn_at", "withdrawal_reason", "presentation"],
         ),
         RecordKind::Revision => (
             &[
@@ -320,6 +326,9 @@ fn id_list(field: &str, value: &Value) -> Result<()> {
 fn validate_field(name: &str, value: &Value) -> Result<()> {
     let key = format!("wiki_{name}");
     match name {
+        "presentation" => {
+            super::source_presentation::SourcePresentation::decode(string_value(&key, value)?)?;
+        }
         "negated" => {
             if !value.is_boolean() {
                 return Err(field_error(&key, "must be a boolean"));

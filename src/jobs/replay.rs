@@ -178,7 +178,7 @@ fn apply(s: &mut State, e: &LedgerEvent, _event_ref: &EventRef) -> Result<()> {
             task.cache_outputs = cache_outputs.clone();
             task.failure_code = reason.clone();
         }
-        EventPayload::RunTransition { from, to, .. } => {
+        EventPayload::RunTransition { from, to, reason } => {
             if s.inspection.state != *from
                 || !matches!(
                     (from, to),
@@ -192,7 +192,9 @@ fn apply(s: &mut State, e: &LedgerEvent, _event_ref: &EventRef) -> Result<()> {
                                 | RunState::Failed,
                         )
                         | (RunState::Paused | RunState::Stopped, RunState::Running)
-                )
+                ) && !(*from == RunState::Paused
+                    && *to == RunState::Paused
+                    && matches!(reason, StopReason::User(_)))
             {
                 return Err(bad());
             }

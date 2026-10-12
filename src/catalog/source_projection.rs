@@ -147,6 +147,7 @@ pub(super) struct Work<'a> {
     pub(super) opposition: BTreeMap<eligibility::OppositionKey, Vec<(RecordId, bool)>>,
     pub(super) new_registry: Vec<RegistryEntry>,
     pub(super) replaced_registry: BTreeSet<VaultRelativePath>,
+    pub(super) graph_replacements: Option<super::graph_projection::GraphReplacementScope>,
     /// Owners whose complete structural before/after states passed Page
     /// admission. Their already-invalid references may change diagnostic shape.
     /// Refresh leaves this empty and keeps its stricter navigation-only guard.
@@ -155,6 +156,57 @@ pub(super) struct Work<'a> {
     pub(super) key_cache: BTreeMap<MatchKey, RegistryProbe>,
 }
 impl<'a> Work<'a> {
+    pub(super) fn verify_presentation(
+        &mut self,
+        before: Option<&ParsedNote>,
+        after: &ParsedNote,
+        operations: &[crate::changes::ExpectedWrite],
+        requested: &BTreeSet<RecordId>,
+    ) -> Result<BTreeSet<VaultRelativePath>> {
+        let previous = before
+            .and_then(|note| note.canonical.as_ref())
+            .map(crate::domain::source_presentation::SourcePresentation::from_record)
+            .transpose()?
+            .flatten();
+        let mut managed_before = BTreeMap::new();
+        if let Some(previous) = &previous {
+            managed_before.insert(
+                previous.current.path.clone(),
+                previous.current.generated_hash.clone(),
+            );
+            for saved in previous.published.values().flatten() {
+                managed_before.insert(saved.path.clone(), saved.generated_hash.clone());
+            }
+        }
+        crate::sources::presentation_planning::verify_change(
+            before,
+            after,
+            operations,
+            requested,
+            &mut |path, maximum| {
+                if !self.before.contains_key(path) {
+                    if let Some(hash) = managed_before.get(path) {
+                        self.capture(path, &ExpectedState::Hash(hash.clone()))?;
+                    } else if let Some(operation) = operations
+                        .iter()
+                        .find(|operation| &operation.target == path)
+                    {
+                        self.capture(path, &operation.expected)?;
+                    } else {
+                        self.capture_path(path)?;
+                    }
+                }
+                let bytes = self
+                    .captured
+                    .get(path)
+                    .map(|document| document.bytes.clone());
+                if bytes.as_ref().is_some_and(|bytes| bytes.len() > maximum) {
+                    return Err(budget());
+                }
+                Ok(bytes)
+            },
+        )
+    }
     pub(super) fn new(
         fs: &'a VaultFs,
         reader: &'a QuerySnapshot,
@@ -195,6 +247,7 @@ impl<'a> Work<'a> {
             opposition: BTreeMap::new(),
             new_registry: vec![],
             replaced_registry: BTreeSet::new(),
+            graph_replacements: None,
             admitted_typed_navigation: BTreeSet::new(),
             edge_overrides: BTreeMap::new(),
             key_cache: BTreeMap::new(),
@@ -498,7 +551,30 @@ impl Work<'_> {
                     let (key, _) = opposition_key(&row.record)
                         .ok_or_else(|| corrupt("assertion lacks proposition"))?;
                     if !self.opposition.contains_key(&key) {
-                        let members = self.reader.opposition_members(&key)?;
+                        let mut members = self.reader.opposition_members(&key)?;
+                        // The selected graph overlay can accept a new assertion or
+                        // retire a previously accepted member in this publication.
+                        members.retain(|(member, _)| {
+                            self.now
+                                .get(member)
+                                .is_none_or(|row| !self.overlay.contains_key(&row.path))
+                        });
+                        members.extend(
+                            self.now
+                                .values()
+                                .filter(|row| {
+                                    self.overlay.contains_key(&row.path)
+                                        && row.record.kind() == RecordKind::Assertion
+                                        && row.record.string("wiki_status") == Some("accepted")
+                                })
+                                .filter_map(|row| {
+                                    opposition_key(&row.record)
+                                        .filter(|(group, _)| group == &key)
+                                        .map(|(_, polarity)| (row.record.id().clone(), polarity))
+                                }),
+                        );
+                        members.sort();
+                        members.dedup();
                         if !members.iter().any(|(member, _)| member == &id) {
                             return Err(corrupt(
                                 "accepted assertion omitted from proposition group",
@@ -800,7 +876,11 @@ fn admit_refresh(
     let fixed = |name: &&String| {
         !matches!(
             name.as_str(),
-            "title" | "wiki_current_revision" | "wiki_revision" | "wiki_revisions"
+            "title"
+                | "wiki_current_revision"
+                | "wiki_revision"
+                | "wiki_revisions"
+                | "wiki_presentation"
         )
     };
     if original
@@ -816,6 +896,13 @@ fn admit_refresh(
     if source_record.string("wiki_current_revision") != Some(new_head.as_str()) {
         return Err(conflict("proposed head differs from planned revision"));
     }
+    let before_note = parse_note(&work.captured[&original.path].bytes);
+    let presentation_paths = work.verify_presentation(
+        Some(&before_note),
+        &source_note,
+        &draft.operations,
+        &BTreeSet::new(),
+    )?;
     let old_retained = scan::list(&original.record, "wiki_revisions");
     let mut expected_retained = old_retained.clone();
     let is_new = !plan.plan.reused;
@@ -904,11 +991,14 @@ fn admit_refresh(
             .iter()
             .cloned()
             .chain(std::iter::once(original.path.clone()))
+            .chain(presentation_paths.iter().cloned())
             .collect();
         if operations.keys().cloned().collect::<BTreeSet<_>>() != expected_paths
-            || operations
-                .iter()
-                .any(|(path, op)| path != &original.path && op.expected != ExpectedState::Absent)
+            || operations.iter().any(|(path, op)| {
+                path != &original.path
+                    && !presentation_paths.contains(path)
+                    && op.expected != ExpectedState::Absent
+            })
         {
             return Err(conflict(
                 "source refresh writes outside exact new immutable tree",
@@ -926,7 +1016,10 @@ fn admit_refresh(
         work.now.insert(new_head.clone(), row);
     } else {
         if !draft.allocated_ids.is_empty()
-            || operations.len() != 1
+            || operations.len() != 1 + presentation_paths.len()
+            || operations
+                .keys()
+                .any(|path| path != &original.path && !presentation_paths.contains(path))
             || !old_retained.iter().any(|id| id == new_head.as_str())
         {
             return Err(conflict(
@@ -1135,6 +1228,8 @@ fn emit_refresh_content(
 }
 
 fn emit_refresh_navigation(work: &mut Work<'_>, delta: &mut CatalogDelta) -> Result<()> {
+    let readable_sources = crate::storage::layout::layout_kind(work.fs.root())?
+        == crate::storage::layout::LayoutKind::ReadableSources;
     let changed_keys: Vec<_> = work
         .new_registry
         .iter()
@@ -1148,7 +1243,13 @@ fn emit_refresh_navigation(work: &mut Work<'_>, delta: &mut CatalogDelta) -> Res
     let mut link_owners: BTreeSet<_> = work
         .overlay
         .keys()
-        .filter(|path| canonical_path(path))
+        .filter(|path| {
+            canonical_path(path)
+                && !(readable_sources
+                    && path
+                        .as_str()
+                        .starts_with(crate::domain::source_presentation::PRESENTATION_PREFIX))
+        })
         .cloned()
         .collect();
     if !changed_keys.is_empty() {
@@ -1678,19 +1779,38 @@ impl Work<'_> {
         delta.records.push(row);
         Ok(())
     }
+    pub(super) fn policy_members(
+        &self,
+        key: &crate::graph::policy_inputs::PolicyInputKey,
+    ) -> Result<Vec<(VaultRelativePath, Blake3Hash)>> {
+        if let Some(scope) = &self.graph_replacements {
+            scope.require(&self.replaced_registry)?;
+            self.reader
+                .policy_members_for_graph(key, &self.replaced_registry)
+        } else {
+            self.reader.policy_members(key, &self.replaced_registry)
+        }
+    }
     pub(super) fn registry_probe(
         &mut self,
         key: &MatchKey,
         include_new: bool,
     ) -> Result<RegistryProbe> {
         self.tick()?;
+        if let Some(scope) = &self.graph_replacements {
+            scope.require(&self.replaced_registry)?;
+        }
         if !include_new && !self.replaced_registry.is_empty() {
             return self.reader.registry_probe_for_key(key);
         }
         if !self.key_cache.contains_key(key) {
-            let probe = self
-                .reader
-                .registry_probe_for_key_excluding(key, &self.replaced_registry)?;
+            let probe = if self.graph_replacements.is_some() {
+                self.reader
+                    .registry_probe_for_graph_key_excluding(key, &self.replaced_registry)?
+            } else {
+                self.reader
+                    .registry_probe_for_key_excluding(key, &self.replaced_registry)?
+            };
             self.key_cache.insert(key.clone(), probe);
         }
         let mut probe = self.key_cache[key].clone();

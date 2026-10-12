@@ -124,6 +124,15 @@ pub(crate) fn catalog_sql(
 }
 /// Identity ranking and ordinary text ranking are independent eligibility channels.
 pub(crate) fn normal_policy(filters: &SearchFilters) -> String {
+    normal_policy_inner(filters, false)
+}
+
+/// Exact record-ID lookup remains an explicit way to inspect empty metadata.
+pub(crate) fn normal_policy_for_exact_id(filters: &SearchFilters) -> String {
+    normal_policy_inner(filters, true)
+}
+
+fn normal_policy_inner(filters: &SearchFilters, exact_id: bool) -> String {
     let proposed = if filters.include_proposed {
         "1"
     } else {
@@ -154,13 +163,35 @@ pub(crate) fn normal_policy(filters: &SearchFilters) -> String {
          AND d.path NOT GLOB 'runs/*/run.md' \
          AND d.path NOT GLOB 'changes/*/change.md'"
     };
-    format!("({proposed}) AND ({state}) AND ({operational})")
+    // Captured content has no Source/Revision record kind. Empty declaration
+    // documents are useful for explicit inspection, but they must not consume
+    // ordinary text-search candidate or result limits through title matches.
+    let readable = if exact_id
+        || filters.include_historical
+        || filters.kinds.contains(&RecordKind::Source)
+        || filters.kinds.contains(&RecordKind::Revision)
+    {
+        "1"
+    } else {
+        "(coalesce(d.kind,'') NOT IN ('source','revision') OR \
+         length(trim(d.body,char(9)||char(10)||char(11)||char(12)||char(13)||' '))>0)"
+    };
+    format!("({proposed}) AND ({state}) AND ({operational}) AND ({readable})")
 }
 pub(crate) fn identity_policy() -> &'static str {
     "d.kind='entity' AND json_extract(r.row_json,'$.identity_eligibility')='current' AND d.eligibility<>'current'"
 }
 pub(crate) fn catalog_normal_policy(filters: &SearchFilters, normalized: bool) -> String {
     let policy = normal_policy(filters);
+    catalog_policy(policy, normalized)
+}
+pub(crate) fn catalog_normal_policy_for_exact_id(
+    filters: &SearchFilters,
+    normalized: bool,
+) -> String {
+    catalog_policy(normal_policy_for_exact_id(filters), normalized)
+}
+fn catalog_policy(policy: String, normalized: bool) -> String {
     if normalized {
         policy.replace(
             "json_extract(r.row_json,'$.description_eligibility')",
@@ -246,16 +277,78 @@ pub(crate) fn context_policy(historical: bool) -> String {
 #[cfg(test)]
 mod adoption_tests {
     use super::*;
+
+    #[test]
+    fn blank_source_metadata_cannot_fill_a_text_result_limit() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE documents(path TEXT,record_id TEXT,kind TEXT,source_id TEXT,owner_revision TEXT,eligibility TEXT,body TEXT); CREATE TABLE records(id TEXT,kind TEXT,authored_status TEXT,row_json TEXT,description_eligibility TEXT);
+            INSERT INTO records VALUES('Page.Useful','page','reviewed','{}',NULL);
+            INSERT INTO records VALUES('Source.Authored','source','active','{}',NULL);
+            INSERT INTO documents VALUES('z-page.md','Page.Useful','page',NULL,NULL,'current','A useful Harbour condition.');
+            INSERT INTO documents VALUES('z-source-note.md','Source.Authored','source',NULL,NULL,'current','An authored Harbour explanation.');
+            INSERT INTO documents VALUES('z-capture.md',NULL,NULL,'Source.Captured','Revision.Captured','current','Original Harbour decision.');").unwrap();
+        for index in 0..40 {
+            let kind = if index % 2 == 0 { "source" } else { "revision" };
+            let id = format!("Metadata.{index}");
+            connection
+                .execute(
+                    "INSERT INTO records VALUES(?1,?2,'active','{}',NULL)",
+                    rusqlite::params![id, kind],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO documents VALUES(?1,?2,?3,NULL,NULL,'current',?4)",
+                    rusqlite::params![
+                        format!("a-metadata-{index:02}.md"),
+                        id,
+                        kind,
+                        " \r\n\t\u{000b}\u{000c}"
+                    ],
+                )
+                .unwrap();
+        }
+        for normalized in [false, true] {
+            let policy = catalog_normal_policy(&SearchFilters::default(), normalized);
+            let paths = connection.prepare(&format!("SELECT d.path FROM documents d LEFT JOIN records r ON r.id=d.record_id WHERE ({policy}) ORDER BY d.path LIMIT 3")).unwrap().query_map([], |row| row.get::<_,String>(0)).unwrap().collect::<std::result::Result<Vec<_>,_>>().unwrap();
+            assert_eq!(paths, ["z-capture.md", "z-page.md", "z-source-note.md"]);
+        }
+        for filters in [
+            SearchFilters {
+                kinds: vec![RecordKind::Source],
+                ..Default::default()
+            },
+            SearchFilters {
+                kinds: vec![RecordKind::Revision],
+                ..Default::default()
+            },
+            SearchFilters {
+                include_historical: true,
+                ..Default::default()
+            },
+        ] {
+            let policy = normal_policy(&filters);
+            let count: i64 = connection.query_row(&format!("SELECT count(*) FROM documents d LEFT JOIN records r ON r.id=d.record_id WHERE ({policy}) AND d.path LIKE 'a-metadata-%'"), [], |row| row.get(0)).unwrap();
+            assert_eq!(
+                count, 40,
+                "explicit inspection preserves metadata eligibility"
+            );
+        }
+        let exact = normal_policy_for_exact_id(&SearchFilters::default());
+        let count: i64 = connection.query_row(&format!("SELECT count(*) FROM documents d LEFT JOIN records r ON r.id=d.record_id WHERE ({exact}) AND d.record_id='Metadata.0'"), [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
+
     #[test]
     fn unadopted_plain_and_unknown_yaml_never_consume_retrieval_caps() {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
-        connection.execute_batch("CREATE TABLE documents(path TEXT,record_id TEXT,kind TEXT,source_id TEXT,owner_revision TEXT,eligibility TEXT); CREATE TABLE records(id TEXT,kind TEXT,authored_status TEXT,row_json TEXT,description_eligibility TEXT);
+        connection.execute_batch("CREATE TABLE documents(path TEXT,record_id TEXT,kind TEXT,source_id TEXT,owner_revision TEXT,eligibility TEXT,body TEXT DEFAULT 'Readable text'); CREATE TABLE records(id TEXT,kind TEXT,authored_status TEXT,row_json TEXT,description_eligibility TEXT);
             INSERT INTO records VALUES('Page.Good','page','reviewed','{}',NULL);
-            INSERT INTO documents VALUES('pages/good.md','Page.Good','page',NULL,NULL,'current');
-            INSERT INTO documents VALUES('notes/plain.md',NULL,NULL,NULL,NULL,'unsupported');
-            INSERT INTO documents VALUES('notes/unknown-yaml.md',NULL,NULL,NULL,NULL,'invalid');
-            INSERT INTO documents VALUES('sources/captured-current/content.md',NULL,NULL,'Source.Current','Revision.Current','current');
-            INSERT INTO documents VALUES('sources/captured-historical/content.md',NULL,NULL,'Source.Current','Revision.Old','historical');").unwrap();
+            INSERT INTO documents(path,record_id,kind,source_id,owner_revision,eligibility) VALUES('pages/good.md','Page.Good','page',NULL,NULL,'current');
+            INSERT INTO documents(path,record_id,kind,source_id,owner_revision,eligibility) VALUES('notes/plain.md',NULL,NULL,NULL,NULL,'unsupported');
+            INSERT INTO documents(path,record_id,kind,source_id,owner_revision,eligibility) VALUES('notes/unknown-yaml.md',NULL,NULL,NULL,NULL,'invalid');
+            INSERT INTO documents(path,record_id,kind,source_id,owner_revision,eligibility) VALUES('sources/captured-current/content.md',NULL,NULL,'Source.Current','Revision.Current','current');
+            INSERT INTO documents(path,record_id,kind,source_id,owner_revision,eligibility) VALUES('sources/captured-historical/content.md',NULL,NULL,'Source.Current','Revision.Old','historical');").unwrap();
         for historical in [false, true] {
             let filters = SearchFilters {
                 include_historical: historical,

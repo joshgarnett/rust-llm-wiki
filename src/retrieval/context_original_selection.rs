@@ -273,6 +273,7 @@ fn hit(original: &SelectionOriginal) -> Result<SearchHit> {
             citation: None,
         },
         secondary_excerpts: Vec::new(),
+        declared_source_refs: Vec::new(),
         reasons: Vec::new(),
         rank_contributions: Vec::new(),
         source_id: Some(original.source_id.clone()),

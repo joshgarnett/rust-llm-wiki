@@ -256,6 +256,7 @@ pub(super) struct GenerationContract {
     pub(super) instruction_role: InstructionRole,
     pub(super) output_limit_field: OutputLimitField,
     pub(super) response_mode: ResponseMode,
+    pub(super) reasoning_effort: Option<crate::config::providers::ReasoningEffort>,
     pub(super) total_generated_token_limit: u64,
     pub(super) schema_fingerprint: Blake3Hash,
     // Exact input schema, unweakened; compiled locally in offline mode.

@@ -194,6 +194,11 @@ impl<'a> SourceView<'a> {
     pub fn from_input(fs: &'a VaultFs, input: &ValidationInput) -> Result<Self> {
         let mut notes = BTreeMap::new();
         let mut overlay = BTreeMap::new();
+        let layout = crate::storage::layout::input_layout_kind(input);
+        let canonical_member = |path: &VaultRelativePath| {
+            canonical_path(path)
+                && !crate::storage::layout::presentation_path_excluded(layout, path)
+        };
         let mut seen_documents = BTreeSet::new();
         for document in &input.documents {
             if !seen_documents.insert(&document.path) {
@@ -202,14 +207,14 @@ impl<'a> SourceView<'a> {
             if Blake3Hash::digest(&document.bytes) != document.hash {
                 return Err(integrity("scan document hash mismatch"));
             }
-            if canonical_path(&document.path)
+            if canonical_member(&document.path)
                 && notes
                     .insert(document.path.clone(), parse_note(&document.bytes))
                     .is_some()
             {
                 return Err(WikiError::invalid("duplicate scan path"));
             }
-            if !canonical_path(&document.path) {
+            if !canonical_member(&document.path) {
                 overlay.insert(document.path.clone(), Some(document.bytes.clone()));
             }
         }
@@ -219,7 +224,7 @@ impl<'a> SourceView<'a> {
                 return Err(WikiError::invalid("duplicate overlay path"));
             }
             overlay.insert(target.path.clone(), target.bytes.clone());
-            if canonical_path(&target.path) {
+            if canonical_member(&target.path) {
                 match &target.bytes {
                     Some(bytes) => {
                         notes.insert(target.path.clone(), parse_note(bytes));

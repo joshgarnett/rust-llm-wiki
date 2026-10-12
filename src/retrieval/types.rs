@@ -101,6 +101,9 @@ pub struct SearchHit {
     pub excerpt: SearchExcerpt,
     /// At most one additional focused passage from the same dense owner.
     pub secondary_excerpts: Vec<SearchExcerpt>,
+    /// Exact references declared by a Page's owned citation block. These are
+    /// authored navigation metadata, not verification of the Page's prose.
+    pub declared_source_refs: Vec<CitationRef>,
     pub reasons: Vec<RetrievalReason>,
     pub rank_contributions: Vec<RankContribution>,
     pub source_id: Option<RecordId>,
@@ -108,7 +111,7 @@ pub struct SearchHit {
 }
 impl Serialize for SearchHit {
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
-        let mut value = s.serialize_struct("SearchHit", 14)?;
+        let mut value = s.serialize_struct("SearchHit", 15)?;
         value.serialize_field("record_ref", &self.locator.record)?;
         value.serialize_field("path", &self.locator.path)?;
         value.serialize_field("locator", &self.locator)?;
@@ -119,6 +122,7 @@ impl Serialize for SearchHit {
         value.serialize_field("identity_eligibility", &self.identity_eligibility)?;
         value.serialize_field("excerpt", &self.excerpt)?;
         value.serialize_field("secondary_excerpts", &self.secondary_excerpts)?;
+        value.serialize_field("declared_source_refs", &self.declared_source_refs)?;
         value.serialize_field("reasons", &self.reasons)?;
         value.serialize_field("rank_contributions", &self.rank_contributions)?;
         value.serialize_field("source_id", &self.source_id)?;

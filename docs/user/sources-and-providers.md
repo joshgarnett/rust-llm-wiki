@@ -83,7 +83,12 @@ formats can retain the original without searchable text. Check the capture
 result before expecting a citation. Individual inputs are limited to 64 MiB;
 large inputs use their own group.
 
-## Maintain imported Sources
+## Update notes from an advanced import
+
+If you captured a folder with `source capture`, repeat that command to save its
+updates. The commands below are for notes added with a reviewed import manifest.
+Your agent can use the import's result file to update selected notes without
+making you assemble batch requests.
 
 Keep the import's result file so you can match originals to source IDs. In its
 JSON Lines output, each `group_committed` event contains `result.items` with
@@ -216,6 +221,11 @@ When a provider request needs credentials, the helper has a 10-second timeout.
 lwiki keeps its token in memory for at most 300 seconds and stops reusing it
 60 seconds before a supplied expiry. A later request gets a fresh token.
 
+If the helper reports that you need to sign in again, follow that program's
+sign-in instructions, then repeat your lwiki command. You do not need to rerun
+setup or change the saved helper settings. You can keep searching locally with
+`lwiki --offline search 'your question'` while the connection is unavailable.
+
 Setup also offers a generation model, described below. Skip it if you only want
 search by meaning. Before saving, review each model, destination, API format,
 credential source and the text it may receive. Embeddings can send wiki text
@@ -328,6 +338,38 @@ accepts `--generation-key-env VARIABLE`, `--generation-key-file PATH` or
 
 Review both models before granting permission and applying the settings, then
 run `lwiki config show`. This saves configuration; it does not start extraction.
+
+### Choose reasoning effort
+
+If your generation model supports reasoning effort, choose how much work it should
+spend thinking before returning a result:
+
+```sh
+lwiki config set generation --reasoning-effort low
+lwiki config show
+```
+
+Expect the generation summary to show `Reasoning effort: low`. Supported choices
+are `none`, `minimal`, `low`, `medium`, `high`, `xhigh` and `max`; your provider and
+model may support only some of them. Use your provider's documented choices. Setup
+also offers this setting, or accepts `--generation-reasoning-effort low`.
+
+To let the provider choose its default again:
+
+```sh
+lwiki config set generation --reasoning-effort default
+```
+
+`default` removes the setting. `none` sends an explicit choice to the provider.
+Omitting this option keeps the saved value. Changing effort asks you to review
+permission, saves configuration and sends no generation request.
+
+Reasoning tokens use part of the maximum output allowance, even when the model
+returns little visible text. Higher effort can use more tokens and take longer.
+If `doctor --probe --role generate` runs out of output tokens, follow its reported
+limit adjustment. Effort alone does not increase the output allowance or establish
+a guaranteed cost. See [extract and review relationships](retrieval.md#extract-and-review-relationships)
+when you are ready to use the model with your notes.
 
 ### Change a model or credentials
 

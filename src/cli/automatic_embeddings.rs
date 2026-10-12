@@ -7,7 +7,8 @@ use crate::{
     app::{
         OfflineApp, OperationOptions,
         embeddings::{
-            AutomaticPreparationState, EmbeddingRuntime, PreparationLimits, PreparationTrigger,
+            AutomaticPreparationOutcome, AutomaticPreparationState, EmbeddingRuntime,
+            PreparationLimits, PreparationTrigger,
         },
     },
     config::{self, DefaultWiki},
@@ -118,6 +119,7 @@ pub(super) fn lookup<T>(
         Err(error) => return local().map(|result| (result, unavailable(error))),
     };
     let mut outcome = app.prepare_automatic_embeddings(&settings, &scoped);
+    let prepared_inputs = outcome.observations.generated_inputs;
     let result = if matches!(
         outcome.state,
         AutomaticPreparationState::Ready | AutomaticPreparationState::Partial
@@ -134,7 +136,7 @@ pub(super) fn lookup<T>(
         local()
     };
     outcome.observations = app.refresh_automatic_accounting(&scoped);
-    let status = serde_json::to_value(outcome).expect("serializable automatic outcome");
+    let status = prepared_status(outcome, &remote_runtime.service, prepared_inputs);
     match result {
         Ok(result) => Ok((result, status)),
         Err(mut error) => {
@@ -169,10 +171,29 @@ pub(super) fn prepare(
     let settings = super::embeddings::EmbeddingSettingsArguments::default()
         .settings(&context.document.embeddings);
     match runtime(&remote).for_automatic_operation(trigger, &settings) {
-        Ok(scoped) => serde_json::to_value(app.prepare_automatic_embeddings(&settings, &scoped))
-            .expect("serializable automatic outcome"),
+        Ok(scoped) => {
+            let outcome = app.prepare_automatic_embeddings(&settings, &scoped);
+            let prepared_inputs = outcome.observations.generated_inputs;
+            prepared_status(outcome, &remote.service, prepared_inputs)
+        }
         Err(error) => unavailable(error),
     }
+}
+
+// Freeze the corpus count before query embedding. The invocation observation
+// includes query requests, which must not be described as newly prepared notes.
+fn prepared_status(
+    outcome: AutomaticPreparationOutcome,
+    service: &crate::config::providers::TrustedService,
+    prepared_inputs: usize,
+) -> Value {
+    let mut status = serde_json::to_value(outcome).expect("serializable automatic outcome");
+    let host = url::Url::parse(&service.service().url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned));
+    status["prepared_inputs"] = json!(prepared_inputs);
+    status["provider"] = json!({"host":host,"model":service.summary().model});
+    status
 }
 
 pub(super) fn attach(envelope: &mut Envelope, status: Value, lexical: bool) {
@@ -312,6 +333,20 @@ pub(super) fn present(status: &Value, output: &mut impl std::io::Write) -> std::
         Some("blocked") => "Automatic similarity search needs attention. Run lwiki config show.",
         _ => return Ok(()),
     };
+    if let Some(count) = status["prepared_inputs"]
+        .as_u64()
+        .filter(|count| *count > 0)
+    {
+        write!(output, "Prepared {count} text chunks")?;
+        if let Some(host) = status["provider"]["host"].as_str() {
+            write!(
+                output,
+                " via {}",
+                super::dispatch::terminal_text(host, false)
+            )?;
+        }
+        write!(output, ". ")?;
+    }
     writeln!(output, "{message}")
 }
 

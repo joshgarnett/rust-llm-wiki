@@ -24,6 +24,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -96,59 +99,62 @@ Options:
       --non-interactive
           Use supplied choices without prompts. Optional agent and model setup default to skipped
 
-      --offline
-          Prevent provider requests and credential helper calls; local operations remain available
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --agent <AGENT>
           Install wiki instructions for Codex, Sagex, Claude Code or Cursor
 
           [possible values: codex, sagex, claude-code, cursor]
 
-      --dry-run
-          Preview without writes, provider requests or credential resolution
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
 
       --agent-scope <AGENT_SCOPE>
           Install for your user account (default) or one project
 
           [possible values: user, project]
 
-      --stage
-          Retain a guarded preparation for a later explicit changes apply
+      --dry-run
+          Preview without writes, provider requests or credential resolution
 
       --agent-directory <AGENT_DIRECTORY>
           Agent home or project folder. Defaults to HOME or the current folder for project scope
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --embedding-model <EMBEDDING_MODEL>
+          Embedding model from your provider. Saved automatic permission may prepare search after setup
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --embedding-model <EMBEDDING_MODEL>
-          Embedding model from your provider. Saved automatic permission may prepare search after setup
+      --embedding-url <EMBEDDING_URL>
+          Your provider's full embeddings-v1 endpoint URL
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
 
-      --embedding-url <EMBEDDING_URL>
-          Your provider's full embeddings-v1 endpoint URL
+      --embedding-dimensions <EMBEDDING_DIMENSIONS>
+          Requested vector dimensions, from 1 to 65536, or auto
 
       --expect-wiki-id <EXPECT_WIKI_ID>
           Refuse a selected wiki whose stable identity differs from this value
 
-      --embedding-dimensions <EMBEDDING_DIMENSIONS>
-          Requested vector dimensions, from 1 to 65536, or auto
+      --key-env <KEY_ENV>
+          Environment variable holding your key. Its name is saved for provider requests
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
-      --key-env <KEY_ENV>
-          Environment variable holding your key. Its name is saved for provider requests
+      --key-file <KEY_FILE>
+          Existing private key file. Setup stores only its absolute path
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
-
-      --key-file <KEY_FILE>
-          Existing private key file. Setup stores only its absolute path
 
       --prompt-key
           Read your key without displaying it and save it in a private file. Requires a terminal
@@ -192,6 +198,11 @@ Options:
 
       --generation-max-output-tokens <GENERATION_MAX_OUTPUT_TOKENS>
           Maximum output tokens for the generation model; omitted settings are kept
+
+      --generation-reasoning-effort <GENERATION_REASONING_EFFORT>
+          Optional generation reasoning effort; default removes the setting, omission keeps it
+
+          [possible values: default, none, minimal, low, medium, high, xhigh, max]
 
       --generation-reuse-auth
           Reuse the embedding credentials after reviewing both destinations
@@ -257,6 +268,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -334,8 +348,16 @@ Options:
       --max-output-tokens <MAX_OUTPUT_TOKENS>
           Generation model's maximum output tokens
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
+
+      --reasoning-effort <REASONING_EFFORT>
+          Generation reasoning effort; default removes the setting. Support depends on your provider/model
+
+          [possible values: default, none, minimal, low, medium, high, xhigh, max]
 
       --dry-run
           Preview without writes, provider requests or credential resolution
@@ -426,6 +448,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -492,6 +517,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -560,6 +588,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -626,6 +657,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -694,6 +728,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -751,6 +788,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -795,9 +835,7 @@ Arguments:
 
 Options:
       --title <TITLE>
-          Human-readable title
-
-          [default: "Local wiki"]
+          Wiki title; defaults to Local wiki, or keeps the title of an interrupted setup
 
       --wiki <WIKI>
           Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
@@ -818,6 +856,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -871,6 +912,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -929,6 +973,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -981,6 +1028,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -1050,14 +1100,17 @@ Options:
       --end <END>
           Exclusive end of the UTF-8 body byte range; requires --start
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
+      --no-sync
+          Read the existing index snapshot without syncing; freshness is not verified. Dry-run only plans this mode
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
       --dry-run
           Preview without writes, provider requests or credential resolution
-
-      --no-sync
-          Read the existing index snapshot without syncing; freshness is not verified. Dry-run only plans this mode
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
@@ -1120,6 +1173,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -1181,6 +1237,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -1247,6 +1306,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -1312,11 +1374,14 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
-      --offline
-          Prevent provider requests and credential helper calls; local operations remain available
-
       --path <PATH>
           New vault-relative path; defaults to pages/<record-id>.md
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
 
       --dry-run
           Preview without writes, provider requests or credential resolution
@@ -1370,6 +1435,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -1434,6 +1502,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -1497,6 +1568,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -1556,6 +1630,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -1625,6 +1702,9 @@ Options:
 
       --max-bytes <MAX_BYTES>
           Maximum bytes of text to return; reports where to continue
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -1698,6 +1778,9 @@ Options:
       --media-type <MEDIA_TYPE>
           Explicit media type for the captured input
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -1753,6 +1836,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -1814,6 +1900,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -1872,6 +1961,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -1942,6 +2034,9 @@ Options:
 
           [default: 64]
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -2003,6 +2098,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -2058,6 +2156,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -2122,6 +2223,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -2174,6 +2278,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -2230,6 +2337,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -2299,52 +2409,55 @@ Options:
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
       --dry-run
           Preview without writes, provider requests or credential resolution
 
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
-
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
+
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
+      --max-output-units <MAX_OUTPUT_UNITS>
+          Lifetime ceiling for each output and reasoning billable class
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --max-output-units <MAX_OUTPUT_UNITS>
-          Lifetime ceiling for each output and reasoning billable class
+      --max-cost <MAX_COST>
+          Checked decimal ceiling; requires a complete provable provider bound
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
 
-      --expect-wiki-id <EXPECT_WIKI_ID>
-          Refuse a selected wiki whose stable identity differs from this value
-
-      --max-cost <MAX_COST>
-          Checked decimal ceiling; requires a complete provable provider bound
-
       --currency <CURRENCY>
           Currency code used with --max-cost
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
-
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --tokens-per-minute <TOKENS_PER_MINUTE>
           Maximum accounted provider tokens per minute
@@ -2408,52 +2521,55 @@ Options:
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
       --dry-run
           Preview without writes, provider requests or credential resolution
 
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
-
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
+
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
+      --max-output-units <MAX_OUTPUT_UNITS>
+          Lifetime ceiling for each output and reasoning billable class
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --max-output-units <MAX_OUTPUT_UNITS>
-          Lifetime ceiling for each output and reasoning billable class
+      --max-cost <MAX_COST>
+          Checked decimal ceiling; requires a complete provable provider bound
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
 
-      --expect-wiki-id <EXPECT_WIKI_ID>
-          Refuse a selected wiki whose stable identity differs from this value
-
-      --max-cost <MAX_COST>
-          Checked decimal ceiling; requires a complete provable provider bound
-
       --currency <CURRENCY>
           Currency code used with --max-cost
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
-
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --tokens-per-minute <TOKENS_PER_MINUTE>
           Maximum accounted provider tokens per minute
@@ -2514,34 +2630,40 @@ Options:
       --quality-target-bytes <QUALITY_TARGET_BYTES>
           Preferred segment size below the hard embedding input ceiling
 
-      --offline
-          Prevent provider requests and credential helper calls; local operations remain available
-
       --providers-config <PROVIDERS_CONFIG>
           Private TOML configuration; never discover provider files inside a vault
 
-      --dry-run
-          Preview without writes, provider requests or credential resolution
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --max-requests <MAX_REQUESTS>
           Lifetime request-attempt ceiling, including retries
 
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
       --concurrency <CONCURRENCY>
           Maximum simultaneous provider requests
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --attempts-per-task <ATTEMPTS_PER_TASK>
+          Maximum attempts for an individual provider task
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --attempts-per-task <ATTEMPTS_PER_TASK>
-          Maximum attempts for an individual provider task
+      --deadline-ms <DEADLINE_MS>
+          Overall remote operation deadline in milliseconds from startup
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --deadline-ms <DEADLINE_MS>
-          Overall remote operation deadline in milliseconds from startup
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
@@ -2549,20 +2671,17 @@ Options:
       --expect-wiki-id <EXPECT_WIKI_ID>
           Refuse a selected wiki whose stable identity differs from this value
 
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
-
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
+
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
-
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
 
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
@@ -2627,34 +2746,40 @@ Options:
       --quality-target-bytes <QUALITY_TARGET_BYTES>
           Preferred segment size below the hard embedding input ceiling
 
-      --offline
-          Prevent provider requests and credential helper calls; local operations remain available
-
       --providers-config <PROVIDERS_CONFIG>
           Private TOML configuration; never discover provider files inside a vault
 
-      --dry-run
-          Preview without writes, provider requests or credential resolution
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --max-requests <MAX_REQUESTS>
           Lifetime request-attempt ceiling, including retries
 
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
       --concurrency <CONCURRENCY>
           Maximum simultaneous provider requests
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --attempts-per-task <ATTEMPTS_PER_TASK>
+          Maximum attempts for an individual provider task
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --attempts-per-task <ATTEMPTS_PER_TASK>
-          Maximum attempts for an individual provider task
+      --deadline-ms <DEADLINE_MS>
+          Overall remote operation deadline in milliseconds from startup
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --deadline-ms <DEADLINE_MS>
-          Overall remote operation deadline in milliseconds from startup
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
@@ -2662,20 +2787,17 @@ Options:
       --expect-wiki-id <EXPECT_WIKI_ID>
           Refuse a selected wiki whose stable identity differs from this value
 
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
-
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
+
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
-
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
 
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
@@ -2746,11 +2868,14 @@ Options:
       --attempts-per-task <ATTEMPTS_PER_TASK>
           Maximum attempts for an individual provider task
 
-      --offline
-          Prevent provider requests and credential helper calls; local operations remain available
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
 
       --dry-run
           Preview without writes, provider requests or credential resolution
@@ -2758,19 +2883,22 @@ Options:
       --max-request-bytes <MAX_REQUEST_BYTES>
           Lifetime ceiling on outgoing request bytes
 
+      --max-response-bytes <MAX_RESPONSE_BYTES>
+          Lifetime ceiling on incoming response bytes
+
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --max-response-bytes <MAX_RESPONSE_BYTES>
-          Lifetime ceiling on incoming response bytes
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
+      --max-output-units <MAX_OUTPUT_UNITS>
+          Lifetime ceiling for each output and reasoning billable class
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
@@ -2778,17 +2906,14 @@ Options:
       --expect-wiki-id <EXPECT_WIKI_ID>
           Refuse a selected wiki whose stable identity differs from this value
 
-      --max-output-units <MAX_OUTPUT_UNITS>
-          Lifetime ceiling for each output and reasoning billable class
-
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
-
       --currency <CURRENCY>
           Currency code used with --max-cost
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
@@ -2904,11 +3029,14 @@ Options:
       --attempts-per-task <ATTEMPTS_PER_TASK>
           Maximum attempts for an individual provider task
 
-      --offline
-          Prevent provider requests and credential helper calls; local operations remain available
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
 
       --dry-run
           Preview without writes, provider requests or credential resolution
@@ -2916,19 +3044,22 @@ Options:
       --max-request-bytes <MAX_REQUEST_BYTES>
           Lifetime ceiling on outgoing request bytes
 
+      --max-response-bytes <MAX_RESPONSE_BYTES>
+          Lifetime ceiling on incoming response bytes
+
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --max-response-bytes <MAX_RESPONSE_BYTES>
-          Lifetime ceiling on incoming response bytes
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
+      --max-output-units <MAX_OUTPUT_UNITS>
+          Lifetime ceiling for each output and reasoning billable class
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
@@ -2936,17 +3067,14 @@ Options:
       --expect-wiki-id <EXPECT_WIKI_ID>
           Refuse a selected wiki whose stable identity differs from this value
 
-      --max-output-units <MAX_OUTPUT_UNITS>
-          Lifetime ceiling for each output and reasoning billable class
-
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
-
       --currency <CURRENCY>
           Currency code used with --max-cost
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
@@ -3167,52 +3295,55 @@ Options:
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
       --dry-run
           Preview without writes, provider requests or credential resolution
 
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
-
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
+
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
+      --max-output-units <MAX_OUTPUT_UNITS>
+          Lifetime ceiling for each output and reasoning billable class
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --max-output-units <MAX_OUTPUT_UNITS>
-          Lifetime ceiling for each output and reasoning billable class
+      --max-cost <MAX_COST>
+          Checked decimal ceiling; requires a complete provable provider bound
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
 
-      --expect-wiki-id <EXPECT_WIKI_ID>
-          Refuse a selected wiki whose stable identity differs from this value
-
-      --max-cost <MAX_COST>
-          Checked decimal ceiling; requires a complete provable provider bound
-
       --currency <CURRENCY>
           Currency code used with --max-cost
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
-
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --tokens-per-minute <TOKENS_PER_MINUTE>
           Maximum accounted provider tokens per minute
@@ -3300,6 +3431,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -3355,6 +3489,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -3412,6 +3549,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -3467,6 +3607,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -3540,52 +3683,55 @@ Options:
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
       --dry-run
           Preview without writes, provider requests or credential resolution
 
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
-
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
+
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
+      --max-output-units <MAX_OUTPUT_UNITS>
+          Lifetime ceiling for each output and reasoning billable class
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --max-output-units <MAX_OUTPUT_UNITS>
-          Lifetime ceiling for each output and reasoning billable class
+      --max-cost <MAX_COST>
+          Checked decimal ceiling; requires a complete provable provider bound
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
 
-      --expect-wiki-id <EXPECT_WIKI_ID>
-          Refuse a selected wiki whose stable identity differs from this value
-
-      --max-cost <MAX_COST>
-          Checked decimal ceiling; requires a complete provable provider bound
-
       --currency <CURRENCY>
           Currency code used with --max-cost
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
-
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --tokens-per-minute <TOKENS_PER_MINUTE>
           Maximum accounted provider tokens per minute
@@ -3735,52 +3881,55 @@ Options:
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
       --dry-run
           Preview without writes, provider requests or credential resolution
 
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
-
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
+
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
+      --max-output-units <MAX_OUTPUT_UNITS>
+          Lifetime ceiling for each output and reasoning billable class
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --max-output-units <MAX_OUTPUT_UNITS>
-          Lifetime ceiling for each output and reasoning billable class
+      --max-cost <MAX_COST>
+          Checked decimal ceiling; requires a complete provable provider bound
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
 
-      --expect-wiki-id <EXPECT_WIKI_ID>
-          Refuse a selected wiki whose stable identity differs from this value
-
-      --max-cost <MAX_COST>
-          Checked decimal ceiling; requires a complete provable provider bound
-
       --currency <CURRENCY>
           Currency code used with --max-cost
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
-
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --tokens-per-minute <TOKENS_PER_MINUTE>
           Maximum accounted provider tokens per minute
@@ -3911,6 +4060,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -3976,58 +4128,61 @@ Options:
       --probe
           Explicitly contact the selected provider within the supplied request limits
 
-      --offline
-          Prevent provider requests and credential helper calls; local operations remain available
-
       --role <ROLE>
           Provider capability to probe: embed or generate
 
           [default: embed]
           [possible values: embed, generate]
 
-      --dry-run
-          Preview without writes, provider requests or credential resolution
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --extraction-schema
           Probe the real extraction JSON schema; requires --probe --role generate
 
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
       --providers-config <PROVIDERS_CONFIG>
           Private TOML configuration; never discover provider files inside a vault
+
+      --max-requests <MAX_REQUESTS>
+          Lifetime request-attempt ceiling, including retries
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --max-requests <MAX_REQUESTS>
-          Lifetime request-attempt ceiling, including retries
+      --concurrency <CONCURRENCY>
+          Maximum simultaneous provider requests
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --concurrency <CONCURRENCY>
-          Maximum simultaneous provider requests
+      --attempts-per-task <ATTEMPTS_PER_TASK>
+          Maximum attempts for an individual provider task
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
 
-      --attempts-per-task <ATTEMPTS_PER_TASK>
-          Maximum attempts for an individual provider task
+      --deadline-ms <DEADLINE_MS>
+          Overall remote operation deadline in milliseconds from startup
 
       --expect-wiki-id <EXPECT_WIKI_ID>
           Refuse a selected wiki whose stable identity differs from this value
 
-      --deadline-ms <DEADLINE_MS>
-          Overall remote operation deadline in milliseconds from startup
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
-
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
 
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
@@ -4104,21 +4259,27 @@ Options:
 
           [default: 3]
 
-      --offline
-          Prevent provider requests and credential helper calls; local operations remain available
-
-      --dry-run
-          Preview without writes, provider requests or credential resolution
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --max-sources <MAX_SOURCES>
           Maximum total sources accepted from the agent (0–64)
 
           [default: 15]
 
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
       --max-source-bytes <MAX_SOURCE_BYTES>
           Maximum lifetime source-content bytes accepted locally (up to 4 MiB)
 
           [default: 524288]
+
+      --run-id <RUN_ID>
+          New run ID; omit to allocate one. Existing IDs require resume
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
@@ -4127,9 +4288,6 @@ Options:
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
-
-      --run-id <RUN_ID>
-          New run ID; omit to allocate one. Existing IDs require resume
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
@@ -4191,21 +4349,27 @@ Options:
 
           [default: 3]
 
-      --offline
-          Prevent provider requests and credential helper calls; local operations remain available
-
-      --dry-run
-          Preview without writes, provider requests or credential resolution
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --max-sources <MAX_SOURCES>
           Maximum total sources accepted from the agent (0–64)
 
           [default: 15]
 
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
       --max-source-bytes <MAX_SOURCE_BYTES>
           Maximum lifetime source-content bytes accepted locally (up to 4 MiB)
 
           [default: 524288]
+
+      --run-id <RUN_ID>
+          New run ID; omit to allocate one. Existing IDs require resume
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
@@ -4214,9 +4378,6 @@ Options:
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
-
-      --run-id <RUN_ID>
-          New run ID; omit to allocate one. Existing IDs require resume
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
@@ -4263,6 +4424,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -4319,6 +4483,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -4377,6 +4544,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -4434,6 +4604,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -4490,6 +4663,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -4562,6 +4738,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -4632,6 +4811,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -4704,6 +4886,78 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## storage migrate
+
+```text
+Make sources readable in Obsidian while preserving all notes and history
+
+Usage: lwiki storage migrate [OPTIONS]
+
+Options:
+      --max-files <MAX_FILES>
+          Maximum files to inspect before making any changes
+
+          [default: 100000]
+
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --max-bytes <MAX_BYTES>
+          Maximum bytes to inspect before making any changes
+
+          [default: 1073741824]
+
+      --expected-plan <EXPECTED_PLAN>
+          Use only the exact plan returned by storage migrate --dry-run
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -4767,6 +5021,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -4823,6 +5080,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -4881,6 +5141,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -4937,6 +5200,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -5003,6 +5269,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -5072,31 +5341,37 @@ Options:
       --concurrency <CONCURRENCY>
           Maximum simultaneous provider requests
 
-      --offline
-          Prevent provider requests and credential helper calls; local operations remain available
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --attempts-per-task <ATTEMPTS_PER_TASK>
           Maximum attempts for an individual provider task
 
-      --dry-run
-          Preview without writes, provider requests or credential resolution
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
 
-      --stage
-          Retain a guarded preparation for a later explicit changes apply
+      --dry-run
+          Preview without writes, provider requests or credential resolution
 
       --max-request-bytes <MAX_REQUEST_BYTES>
           Lifetime ceiling on outgoing request bytes
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --max-response-bytes <MAX_RESPONSE_BYTES>
+          Lifetime ceiling on incoming response bytes
 
       --preferences <PREFERENCES>
           Select a user configuration file (TOML or legacy JSON)
 
           [alias: --config]
 
-      --max-response-bytes <MAX_RESPONSE_BYTES>
-          Lifetime ceiling on incoming response bytes
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
@@ -5104,23 +5379,20 @@ Options:
       --expect-wiki-id <EXPECT_WIKI_ID>
           Refuse a selected wiki whose stable identity differs from this value
 
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
-
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
-
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
-
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
 
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
       --currency <CURRENCY>
           Currency code used with --max-cost
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -5163,6 +5435,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -5231,6 +5506,9 @@ Options:
       --raw
           Include bounded private provider text instead of safe metadata only
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -5295,6 +5573,9 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
+
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
@@ -5347,6 +5628,9 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -5414,6 +5698,9 @@ Options:
           Target schema version; future schemas cannot be downgraded
 
           [default: 1]
+
+      --verbose
+          Include detailed search diagnostics and exact citation metadata in human output
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available

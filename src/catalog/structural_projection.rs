@@ -25,7 +25,7 @@ use crate::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-fn roles() -> Vec<EligibilityRole> {
+pub(super) fn roles() -> Vec<EligibilityRole> {
     let mut roles = vec![
         EligibilityRole::DeclaredSupport,
         EligibilityRole::SourceInventory,
@@ -235,7 +235,7 @@ pub(super) fn recompute(
             PolicyKind::Review => PolicyInputKey::ReviewReceiptCandidates,
         };
         let mut notes = BTreeMap::new();
-        for (path, hash) in work.reader.policy_members(&key, &work.replaced_registry)? {
+        for (path, hash) in work.policy_members(&key)? {
             work.capture(&path, &ExpectedState::Hash(hash))?;
             notes.insert(path.clone(), work.note(&path)?);
         }
@@ -591,12 +591,13 @@ pub(super) fn recompute(
             .extend(after.difference(&before).cloned());
         // Retain nonstructural support/generation edges for dynamic discovery.
         let mut complete = after;
-        complete.extend(work.reader.outgoing_edges(
+        complete.extend(work.edges(
             id,
             &[
                 EligibilityRole::AssertionEvidence,
                 EligibilityRole::GenerationPacket,
             ],
+            false,
         )?);
         work.edge_overrides.insert(id.clone(), complete);
         work.now.insert(id.clone(), rows.remove(id).unwrap());
@@ -793,12 +794,38 @@ fn adoption_integrity(
                         Ok(())
                     })()
                 }
-                (StructuralStage::EvidenceIntegrity, RecordKind::Evidence) => view
-                    .verify(
-                        &CitationRef::Assertion(evidence_reference(&row.record)?),
+                (StructuralStage::EvidenceIntegrity, RecordKind::Evidence) => {
+                    let reference = evidence_reference(&row.record)?;
+                    let mut observed = BTreeMap::new();
+                    // Match full rebuild: even failed verification preserves
+                    // the partial immutable content/original observations.
+                    if let Err(error) = view.revision_content_bounded(
+                        &reference.source_id,
+                        &reference.source_revision,
+                        &mut observed,
+                        work.limits.max_file_bytes,
+                        work.limits.max_file_bytes,
+                    ) && error.code == ErrorCode::BudgetExceeded
+                    {
+                        return Err(error);
+                    }
+                    let result = view.verify(
+                        &CitationRef::Assertion(reference),
                         CitationScope::Historical,
-                    )
-                    .map(|_| ()),
+                    );
+                    if let Ok(verified) = &result {
+                        observed.extend(verified.dependencies.iter().map(|dependency| {
+                            (dependency.path.clone(), dependency.expected.clone())
+                        }));
+                    }
+                    for (path, expected) in observed {
+                        if !crate::sources::revision::canonical_path(&path) {
+                            work.capture(&path, &expected)?;
+                            work.facts.get_mut(id).unwrap().direct_paths.insert(path);
+                        }
+                    }
+                    result.map(|_| ())
+                }
                 _ => continue,
             };
             if let Err(error) = result {

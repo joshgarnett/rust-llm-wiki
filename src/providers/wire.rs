@@ -199,6 +199,7 @@ pub(super) fn seal(
                             .response_mode
                             .unwrap_or(ResponseMode::TextJson),
                     )
+                || c.reasoning_effort != service.service().reasoning_effort
                 || task.schema_hash.as_ref() != Some(&c.schema_fingerprint)
             {
                 return Err(WikiError::invalid("generation sealed settings differ"));
@@ -218,7 +219,8 @@ pub(super) fn seal(
             let mini = matches!(c.basis, BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1);
             let known = chat || mini;
             if known
-                && (c.total_generated_token_limit == 0
+                && (c.reasoning_effort.is_some()
+                    || c.total_generated_token_limit == 0
                     || c.total_generated_token_limit > 32768
                     || (chat
                         && !matches!(c.output_limit_field, OutputLimitField::MaxCompletionTokens))

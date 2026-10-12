@@ -10,6 +10,61 @@ use crate::{
 use std::time::{Duration, Instant};
 
 impl OfflineApp {
+    /// Complete a sealed active publication before ledger replay inspects visible receipts.
+    pub(crate) fn recover_graph_generation_publication(&self) -> Result<()> {
+        let writer = WriterPermit::acquire(
+            self.fs.root(),
+            Duration::from_millis(self.options.lock_timeout_ms),
+        )?;
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        if catalog.operation_state()?.is_some() {
+            crate::jobs::checkpoint::recover_job_active(&self.fs, &writer, &self.vault_id)?;
+        } else {
+            ChangeEngine::new(self.fs.clone())?.recover(
+                &writer,
+                &CatalogGraphValidator,
+                &catalog,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Finish exact canonical publication before reopening a transient response.
+    /// The named Change proves the pair; the retained ledger authenticates usage.
+    pub(crate) fn recover_committed_graph_generation(
+        &self,
+        ledger: &JobLedger,
+        attempt: &AttemptRef,
+        complete_run: bool,
+    ) -> Result<Option<(DurableOutputRef, DurableOutputRef)>> {
+        self.recover_graph_generation_publication()?;
+        let Some(committed) = crate::jobs::checkpoint::graph_generation_committed(ledger, attempt)?
+        else {
+            return Ok(None);
+        };
+        let output = committed.usage.outputs[0].clone();
+        ledger.outputs_committed(
+            attempt,
+            &committed.change,
+            committed.receipt.clone(),
+            committed.usage.outputs,
+            vec![],
+        )?;
+        ledger.settle(attempt)?;
+        ledger.finish_remote_task(
+            &attempt.task_key,
+            vec![output.clone()],
+            vec![],
+            |_: &VectorCacheRef| Ok(false),
+        )?;
+        if complete_run && ledger.inspect()?.state == RunState::Running {
+            crate::app::remote::finish_provider_job(ledger)?;
+        }
+        ledger.remove_spool_after_verified_commit(attempt)?;
+        self.checkpoint_generation(ledger)?;
+        Ok(Some((output, committed.receipt)))
+    }
+
     /// Resolve a named committed pair before touching transient generation input.
     /// The caller owns the invocation deadline and provider/task allowance.
     pub(crate) fn publish_source_relation_attempt(
@@ -133,21 +188,26 @@ impl OfflineApp {
             path: receipt_path,
             hash: Blake3Hash::digest(receipt_bytes),
         };
-        let source_relations = ledger
+        let typed_generation = ledger
             .inspect()?
             .tasks
             .get(&plan.attempt.task_key)
-            .is_some_and(|task| task.spec.stage == TaskStage::PrepareSourceRelations);
+            .is_some_and(|task| {
+                matches!(
+                    task.spec.stage,
+                    TaskStage::PrepareSourceRelations | TaskStage::Extract
+                )
+            });
         let writer = WriterPermit::acquire(
             self.fs.root(),
             Duration::from_millis(self.options.lock_timeout_ms),
         )?;
         let engine = ChangeEngine::new(self.fs.clone())?;
         let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
-        if !source_relations || catalog.operation_state()?.is_none() {
+        if !typed_generation || catalog.operation_state()?.is_none() {
             engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
         }
-        let prepared = if source_relations {
+        let prepared = if typed_generation {
             // The selected publisher regenerates the exact typed output pair and
             // receipt from retained Received authority before granting a seal.
             crate::jobs::checkpoint::publish_job_draft(

@@ -39,6 +39,8 @@ const DELTA_VERSION: u32 = 3;
 const MAX_DELTA_BYTES: usize = 256 * 1024 * 1024;
 const MAX_SELECTED_BYTES: usize = 256 * 1024 * 1024;
 
+#[path = "graph_admission.rs"]
+mod graph_admission;
 #[path = "indexed_preview.rs"]
 mod indexed_preview;
 #[path = "legacy_page_admission.rs"]
@@ -60,6 +62,8 @@ pub(crate) struct RetainedDelta {
     rows: CatalogDelta,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     legacy_page_admission: Option<LegacyPageAdmission>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    graph_admission: Option<crate::changes::indexed_refresh::GraphAdmission>,
 }
 
 /// A frozen import intent compares trusted preparation results; it cannot
@@ -161,6 +165,7 @@ pub(crate) struct IndexedRefreshSession<'a> {
     delta: RetainedDelta,
     phase: IndexedRefreshPhase,
     selected_bytes_remaining: Cell<usize>,
+    graph_budget: Option<super::graph_projection::GraphBudget>,
 }
 
 fn recovery(message: &str) -> WikiError {
@@ -357,7 +362,167 @@ fn require_selected_delta_scope(
 }
 
 impl RetainedDelta {
+    fn require_presentation_writes(
+        &self,
+        manifest: &crate::changes::ChangeManifest,
+        engine: &ChangeEngine,
+    ) -> Result<BTreeSet<VaultRelativePath>> {
+        use crate::domain::source_presentation::PRESENTATION_PREFIX;
+        let sources: Vec<_> = self
+            .rows
+            .records
+            .iter()
+            .filter(|row| {
+                row.record.kind() == RecordKind::Source
+                    && manifest.operations.iter().any(|op| op.target == row.path)
+            })
+            .collect();
+        let readable_sources = crate::storage::layout::layout_kind(engine.fs().root())?
+            == crate::storage::layout::LayoutKind::ReadableSources;
+        if readable_sources
+            && self.rows.documents.iter().any(|mutation| match mutation {
+                super::normalized_delta::DocumentMutation::Put { row } => {
+                    row.path.as_str().starts_with(PRESENTATION_PREFIX)
+                }
+                _ => false,
+            })
+        {
+            return Err(recovery(
+                "saved-note displays cannot become indexed documents",
+            ));
+        }
+        if sources.is_empty() {
+            if readable_sources
+                && manifest
+                    .operations
+                    .iter()
+                    .any(|op| op.target.as_str().starts_with(PRESENTATION_PREFIX))
+            {
+                return Err(recovery("saved-note write lacks Source ownership"));
+            }
+            return Ok(BTreeSet::new());
+        }
+        let remaining = Cell::new(MAX_SELECTED_BYTES);
+        let payload = |index: usize, before: bool| -> Result<Option<Vec<u8>>> {
+            let operation = &manifest.operations[index];
+            let (side, expected, reference) = if before {
+                ("before", &operation.before, &operation.before_payload)
+            } else {
+                ("proposed", &operation.after, &operation.after_payload)
+            };
+            let bytes = engine.verify_payload_with_limit(
+                &manifest.change_id,
+                index,
+                side,
+                &operation.target,
+                (expected, reference),
+                remaining.get(),
+            )?;
+            remaining.set(
+                remaining
+                    .get()
+                    .checked_sub(bytes.as_ref().map_or(0, Vec::len))
+                    .ok_or_else(|| budget("saved-note retained replay exceeds byte ceiling"))?,
+            );
+            Ok(bytes)
+        };
+        let operations = manifest
+            .operations
+            .iter()
+            .enumerate()
+            .map(|(index, operation)| {
+                Ok(crate::changes::ExpectedWrite {
+                    target: operation.target.clone(),
+                    expected: operation.before.clone(),
+                    proposed: payload(index, false)?,
+                    apply_after: operation
+                        .apply_after
+                        .iter()
+                        .map(|index| manifest.operations[*index].target.clone())
+                        .collect(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut paths = BTreeSet::new();
+        for source in sources {
+            let index = manifest
+                .operations
+                .iter()
+                .position(|op| op.target == source.path)
+                .ok_or_else(|| recovery("saved-note Source operation missing"))?;
+            let before = payload(index, true)?.map(|bytes| crate::records::parse_note(&bytes));
+            let after = crate::records::parse_note(
+                operations[index]
+                    .proposed
+                    .as_deref()
+                    .ok_or_else(|| recovery("saved-note Source after-image missing"))?,
+            );
+            if after.canonical.as_ref() != Some(&source.record) || after.source_hash != source.hash
+            {
+                return Err(recovery(
+                    "saved-note Source row differs from retained after-image",
+                ));
+            }
+            let requested = match &self.operation {
+                Some(IndexedWriteOperation::PageWithSources { sources, .. }) => sources
+                    .iter()
+                    .find(|target| target.source_id == *source.record.id())
+                    .map(|target| target.revisions.iter().cloned().collect())
+                    .unwrap_or_default(),
+                _ => BTreeSet::new(),
+            };
+            paths.extend(crate::sources::presentation_planning::verify_change(
+                before.as_ref(),
+                &after,
+                &operations,
+                &requested,
+                &mut |path, maximum| {
+                    if let Some(index) =
+                        manifest.operations.iter().position(|op| &op.target == path)
+                    {
+                        return payload(index, true);
+                    }
+                    let expected = self
+                        .before
+                        .iter()
+                        .find(|dependency| &dependency.path == path)
+                        .ok_or_else(|| {
+                            recovery("saved-note replay read is outside retained before guards")
+                        })?;
+                    let bytes = read_bounded(engine.fs(), path, maximum.min(remaining.get()))?;
+                    remaining.set(
+                        remaining
+                            .get()
+                            .checked_sub(bytes.as_ref().map_or(0, Vec::len))
+                            .ok_or_else(|| {
+                                budget("saved-note replay input exceeds byte ceiling")
+                            })?,
+                    );
+                    let actual = bytes.as_ref().map_or(ExpectedState::Absent, |bytes| {
+                        ExpectedState::Hash(Blake3Hash::digest(bytes))
+                    });
+                    if actual != expected.expected {
+                        return Err(recovery("saved-note replay dependency changed"));
+                    }
+                    Ok(bytes)
+                },
+            )?);
+        }
+        if readable_sources
+            && manifest.operations.iter().any(|op| {
+                op.target.as_str().starts_with(PRESENTATION_PREFIX) && !paths.contains(&op.target)
+            })
+        {
+            return Err(recovery(
+                "saved-note operation was not derived by renderer replay",
+            ));
+        }
+        Ok(paths)
+    }
     pub(crate) fn validate_embedded_envelope(&self, proof: &IndexedRefreshProof) -> Result<()> {
+        if proof.version == 5 {
+            return graph_admission::validate_embedded(self, proof);
+        }
         let descriptor = self
             .legacy_page_admission
             .as_ref()
@@ -399,11 +564,12 @@ impl RetainedDelta {
         dependent_sources: &[crate::changes::indexed_refresh::IndexedRefreshSourceDependency],
         manifest: &crate::changes::ChangeManifest,
         engine: &ChangeEngine,
+        presentation_paths: &BTreeSet<VaultRelativePath>,
     ) -> Result<()> {
         use super::{normalized_delta::DocumentMutation, row_projection};
         use crate::records::parse_note;
         let sources: BTreeSet<_> = refreshes.iter().map(|target| &target.source_id).collect();
-        let mut expected_paths = BTreeSet::new();
+        let mut expected_paths = presentation_paths.clone();
         let mut expected_documents = BTreeMap::new();
         let mut allocated = BTreeMap::new();
         let mut fresh = BTreeSet::new();
@@ -568,7 +734,11 @@ impl RetainedDelta {
             let fixed = |name: &&String| {
                 !matches!(
                     name.as_str(),
-                    "title" | "wiki_current_revision" | "wiki_revision" | "wiki_revisions"
+                    "title"
+                        | "wiki_current_revision"
+                        | "wiki_revision"
+                        | "wiki_revisions"
+                        | "wiki_presentation"
                 )
             };
             if prior
@@ -904,11 +1074,13 @@ impl RetainedDelta {
         &self,
         manifest: &crate::changes::ChangeManifest,
         engine: &ChangeEngine,
+        graph_budget: Option<&super::graph_projection::GraphBudget>,
     ) -> Result<()> {
         let Some(operation) = &self.operation else {
             // Exact historical v2 admission is intentionally unchanged.
             return Ok(());
         };
+        let presentation_paths = self.require_presentation_writes(manifest, engine)?;
         let written = |id: &RecordId, kind: RecordKind| {
             self.rows.records.iter().find(|row| {
                 row.record.id() == id
@@ -919,25 +1091,55 @@ impl RetainedDelta {
             }).ok_or_else(|| recovery("indexed operation identity, kind, or after-image differs from its manifest"))
         };
         match operation {
+            IndexedWriteOperation::GraphBatch { action, records } => {
+                super::graph_projection::validate_retained_rows(
+                    engine,
+                    manifest,
+                    *action,
+                    records,
+                    &self.rows,
+                    graph_budget.ok_or_else(|| recovery("graph verification budget missing"))?,
+                )?;
+            }
             IndexedWriteOperation::SourceRefreshBatch {
                 refreshes,
                 dependent_sources,
             } => {
-                self.require_refresh_batch_rows(refreshes, dependent_sources, manifest, engine)?;
+                self.require_refresh_batch_rows(
+                    refreshes,
+                    dependent_sources,
+                    manifest,
+                    engine,
+                    &presentation_paths,
+                )?;
             }
             IndexedWriteOperation::SourceWithdraw { source_id } => {
                 let source = written(source_id, RecordKind::Source)?;
-                if manifest.operations.len() != 1
-                    || manifest.operations[0].target != source.path
+                let expected_paths: BTreeSet<_> = presentation_paths
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(source.path.clone()))
+                    .collect();
+                if manifest
+                    .operations
+                    .iter()
+                    .map(|op| op.target.clone())
+                    .collect::<BTreeSet<_>>()
+                    != expected_paths
                     || !self.rows.owners.is_empty()
                 {
                     return Err(recovery("withdrawal crosses its existing Source boundary"));
                 }
-                let op = &manifest.operations[0];
+                let (index, op) = manifest
+                    .operations
+                    .iter()
+                    .enumerate()
+                    .find(|(_, op)| op.target == source.path)
+                    .ok_or_else(|| recovery("withdrawal Source operation missing"))?;
                 let before = engine
                     .verify_payload(
                         &manifest.change_id,
-                        0,
+                        index,
                         "before",
                         &op.target,
                         &op.before,
@@ -947,7 +1149,7 @@ impl RetainedDelta {
                 let after = engine
                     .verify_payload(
                         &manifest.change_id,
-                        0,
+                        index,
                         "proposed",
                         &op.target,
                         &op.after,
@@ -968,7 +1170,12 @@ impl RetainedDelta {
                     .as_ref()
                     .filter(|record| *record == &source.record)
                     .ok_or_else(|| recovery("withdrawal row differs from retained bytes"))?;
-                let allowed = ["wiki_status", "wiki_withdrawn_at", "wiki_withdrawal_reason"];
+                let allowed = [
+                    "wiki_status",
+                    "wiki_withdrawn_at",
+                    "wiki_withdrawal_reason",
+                    "wiki_presentation",
+                ];
                 if old.string("wiki_status") != Some("active")
                     || new.string("wiki_status") != Some("withdrawn")
                     || new.string("wiki_withdrawn_at").is_none()
@@ -1075,6 +1282,79 @@ impl RetainedDelta {
                     &self.before,
                     &self.after,
                 )?;
+            }
+            IndexedWriteOperation::PageWithSources { pages, sources } => {
+                let mut expected_paths = presentation_paths.clone();
+                for page in pages {
+                    if written(&page.id, RecordKind::Page)?.path != page.path {
+                        return Err(recovery("cited Page identity differs"));
+                    }
+                    expected_paths.insert(page.path.clone());
+                }
+                for target in sources {
+                    let source = written(&target.source_id, RecordKind::Source)?;
+                    let (index, op) = manifest
+                        .operations
+                        .iter()
+                        .enumerate()
+                        .find(|(_, op)| op.target == source.path)
+                        .ok_or_else(|| recovery("cited Source write missing"))?;
+                    let before = engine
+                        .verify_payload(
+                            &manifest.change_id,
+                            index,
+                            "before",
+                            &op.target,
+                            &op.before,
+                            &op.before_payload,
+                        )?
+                        .ok_or_else(|| recovery("cited Source predecessor missing"))?;
+                    let after = engine
+                        .verify_payload(
+                            &manifest.change_id,
+                            index,
+                            "proposed",
+                            &op.target,
+                            &op.after,
+                            &op.after_payload,
+                        )?
+                        .ok_or_else(|| recovery("cited Source proposal missing"))?;
+                    let before = crate::records::parse_note(&before);
+                    let after = crate::records::parse_note(&after);
+                    let old = before
+                        .canonical
+                        .as_ref()
+                        .ok_or_else(|| recovery("cited Source predecessor invalid"))?;
+                    let new = after
+                        .canonical
+                        .as_ref()
+                        .ok_or_else(|| recovery("cited Source proposal invalid"))?;
+                    if before.body() != after.body()
+                        || old
+                            .fields()
+                            .iter()
+                            .filter(|(key, _)| key.as_str() != "wiki_presentation")
+                            .ne(new
+                                .fields()
+                                .iter()
+                                .filter(|(key, _)| key.as_str() != "wiki_presentation"))
+                    {
+                        return Err(recovery(
+                            "cited Source publication changes fields outside presentation ownership",
+                        ));
+                    }
+                    expected_paths.insert(source.path.clone());
+                }
+                if expected_paths.len() != manifest.operations.len()
+                    || manifest.operations.iter().any(|op| {
+                        !expected_paths.contains(&op.target)
+                            || matches!(op.after, ExpectedState::Absent)
+                    })
+                {
+                    return Err(recovery(
+                        "cited Page writes outside its authenticated Page and saved-note targets",
+                    ));
+                }
             }
             IndexedWriteOperation::PageBatch { pages } => {
                 for page in pages {
@@ -1233,6 +1513,7 @@ impl RetainedDelta {
                         .any(|owner| owner.key.source_component != source_id.as_str())
                     || manifest.operations.iter().any(|op| {
                         op.target != source.path
+                            && !presentation_paths.contains(&op.target)
                             && !op
                                 .target
                                 .as_str()
@@ -1269,7 +1550,8 @@ impl RetainedDelta {
                         ));
                     }
                 }
-                let mut expected_paths = BTreeSet::new();
+                let mut expected_paths: BTreeSet<_> =
+                    presentation_paths.iter().map(ToString::to_string).collect();
                 for capture in captures {
                     let source_id = &capture.source_id;
                     let revision_id = &capture.revision_id;
@@ -1351,10 +1633,26 @@ impl RetainedDelta {
         engine: &ChangeEngine,
         proof: &IndexedRefreshProof,
     ) -> Result<()> {
-        let (manifest, hash) = engine.load_manifest_structure(&proof.change.change_id)?;
+        let graph_budget = (proof.version == 5).then(super::graph_projection::GraphBudget::new);
+        self.require_bound_with_budget(catalog, engine, proof, graph_budget.as_ref())
+    }
+    fn require_bound_with_budget(
+        &self,
+        catalog: &Catalog,
+        engine: &ChangeEngine,
+        proof: &IndexedRefreshProof,
+        graph_budget: Option<&super::graph_projection::GraphBudget>,
+    ) -> Result<()> {
+        let (manifest, hash) = if let Some(budget) = graph_budget {
+            engine.load_manifest_structure_with_reader(&proof.change.change_id, &mut |p, m| {
+                budget.read(engine.fs(), p, m)
+            })?
+        } else {
+            engine.load_manifest_structure(&proof.change.change_id)?
+        };
         proof.validate_manifest(&manifest)?;
         if hash != proof.change.manifest_hash
-            || (!matches!(self.version, 2..=4) && !(cfg!(test) && self.version == 1))
+            || (!matches!(self.version, 2..=5) && !(cfg!(test) && self.version == 1))
             || (self.version == 2 && self.rows.version != 2)
             || (self.version >= 3 && self.rows.version != 3)
             || (self.version <= 2
@@ -1388,8 +1686,20 @@ impl RetainedDelta {
             self.validate_embedded_envelope(proof)?;
             legacy_page_admission::validate_retained_admission(catalog, engine, proof, self)?;
         }
+        if (self.version == 5) != self.graph_admission.is_some() {
+            return Err(recovery("graph admission descriptor/version mismatch"));
+        }
+        if self.version == 5 {
+            self.validate_embedded_envelope(proof)?;
+            graph_admission::validate_retained(
+                engine,
+                proof,
+                self,
+                graph_budget.ok_or_else(|| recovery("graph verification budget missing"))?,
+            )?;
+        }
         self.rows.validate()?;
-        self.require_operation_rows(&manifest, engine)?;
+        self.require_operation_rows(&manifest, engine, graph_budget)?;
         if let Some(IndexedWriteOperation::LiteralEdit { path }) = &self.operation {
             let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
             if QueryCatalog::snapshot(&reader) != &proof.base
@@ -1409,6 +1719,8 @@ impl RetainedDelta {
         match &self.operation {
             Some(
                 IndexedWriteOperation::PageBatch { .. }
+                | IndexedWriteOperation::PageWithSources { .. }
+                | IndexedWriteOperation::GraphBatch { .. }
                 | IndexedWriteOperation::LiteralEdit { .. }
                 | IndexedWriteOperation::JobBatch { .. }
                 | IndexedWriteOperation::PageRename { .. }
@@ -1464,7 +1776,7 @@ fn load_delta(catalog: &Catalog, proof: &IndexedRefreshProof) -> Result<Retained
     crate::maintenance_diagnostic::observe(
         crate::maintenance_diagnostic::Phase::RetainedAuthority,
         || {
-            if proof.version == 4 {
+            if matches!(proof.version, 4 | 5) {
                 let engine = ChangeEngine::new(catalog.fs.clone())?;
                 let (retained, delta) = engine
                     .load_indexed_refresh_retention(&proof.change)?
@@ -1594,6 +1906,7 @@ impl<'a> IndexedRefreshSession<'a> {
             after: parts.after,
             rows: parts.delta,
             legacy_page_admission: None,
+            graph_admission: None,
         };
         super::normalized_delta::counted(&delta, MAX_DELTA_BYTES)?;
         let bytes =
@@ -1899,6 +2212,7 @@ impl<'a> IndexedRefreshSession<'a> {
             after,
             rows,
             legacy_page_admission: None,
+            graph_admission: None,
         };
         super::normalized_delta::counted(&delta, MAX_DELTA_BYTES)?;
         let bytes =
@@ -1955,8 +2269,13 @@ impl<'a> IndexedRefreshSession<'a> {
         writer: &'a WriterPermit,
         proof: IndexedRefreshProof,
     ) -> Result<Self> {
-        let delta = load_delta(catalog, &proof)?;
-        Self::open(catalog, writer, proof, delta)
+        let graph_budget = (proof.version == 5).then(super::graph_projection::GraphBudget::new);
+        let delta = if let Some(budget) = &graph_budget {
+            graph_admission::load_delta(catalog, &proof, budget)?
+        } else {
+            load_delta(catalog, &proof)?
+        };
+        Self::open_with_budget(catalog, writer, proof, delta, graph_budget)
     }
 
     fn open(
@@ -1965,12 +2284,33 @@ impl<'a> IndexedRefreshSession<'a> {
         proof: IndexedRefreshProof,
         delta: RetainedDelta,
     ) -> Result<Self> {
+        let graph_budget = (proof.version == 5).then(super::graph_projection::GraphBudget::new);
+        Self::open_with_budget(catalog, writer, proof, delta, graph_budget)
+    }
+    fn open_with_budget(
+        catalog: &Catalog,
+        writer: &'a WriterPermit,
+        proof: IndexedRefreshProof,
+        delta: RetainedDelta,
+        graph_budget: Option<super::graph_projection::GraphBudget>,
+    ) -> Result<Self> {
+        if let Some(budget) = &graph_budget {
+            budget.tick()?;
+        }
         writer.require_root(catalog.fs.root())?;
         if catalog.options.busy_timeout_ms > 30_000 {
             return Err(recovery("refresh timeout exceeds ceiling"));
         }
+        if proof.version == 5 {
+            let authority = catalog
+                .operation_state()?
+                .ok_or_else(|| recovery("graph operation authority missing"))?;
+            if authority.active().is_some() {
+                require_authority(&authority, &proof, IndexedRefreshPhase::AtBase, true)?;
+            }
+        }
         let engine = ChangeEngine::new(catalog.fs.clone())?;
-        delta.require_bound(catalog, &engine, &proof)?;
+        delta.require_bound_with_budget(catalog, &engine, &proof, graph_budget.as_ref())?;
         let timeout = Duration::from_millis(catalog.options.busy_timeout_ms);
         let selection = selector::delta_selection(&catalog.fs, writer, &catalog.vault_id, timeout)?;
         selector::ensure_delta_ready(&catalog.fs, writer, &selection, timeout)?;
@@ -2029,6 +2369,7 @@ impl<'a> IndexedRefreshSession<'a> {
             delta,
             phase,
             selected_bytes_remaining: Cell::new(MAX_SELECTED_BYTES),
+            graph_budget,
         };
         if phase == IndexedRefreshPhase::AlreadyPublished {
             session.verify_published()?;
@@ -2041,7 +2382,7 @@ impl<'a> IndexedRefreshSession<'a> {
         if fs.root() != self.catalog.fs.root() {
             return Err(recovery("refresh session belongs to another vault"));
         }
-        if !matches!(self.delta.version, 2..=4) {
+        if !matches!(self.delta.version, 2..=5) {
             return Ok(fs.clone());
         }
         self.retained()?;
@@ -2066,8 +2407,16 @@ impl<'a> IndexedRefreshSession<'a> {
             .ok_or_else(|| recovery("published refresh has no starting ownership capability"))
     }
     fn retained(&self) -> Result<()> {
-        if self.proof.version == 4 {
-            if load_delta(&self.catalog, &self.proof)? != self.delta {
+        if let Some(budget) = &self.graph_budget {
+            budget.tick()?;
+        }
+        if matches!(self.proof.version, 4 | 5) {
+            let retained = if let Some(budget) = &self.graph_budget {
+                graph_admission::load_delta(&self.catalog, &self.proof, budget)?
+            } else {
+                load_delta(&self.catalog, &self.proof)?
+            };
+            if retained != self.delta {
                 return Err(recovery("retained legacy Page envelope changed"));
             }
             return Ok(());
@@ -2106,7 +2455,33 @@ impl<'a> IndexedRefreshSession<'a> {
         }
         // Only exact operation targets may already contain their planned after
         // bytes during replay; unchanged selected facts must still match.
-        self.verify_selected(false, true)
+        self.verify_selected(false, true)?;
+        if self.proof.version == 5 {
+            let authority = self
+                .catalog
+                .operation_state()?
+                .ok_or_else(|| recovery("graph authority missing"))?;
+            if authority.active().is_none() {
+                self.reprove_graph_before_activation()?;
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn validate_retained_manifest(
+        &self,
+        engine: &ChangeEngine,
+        manifest: &crate::changes::ChangeManifest,
+    ) -> Result<()> {
+        if let Some(budget) = &self.graph_budget {
+            engine.validate_manifest_with_reader(
+                manifest,
+                &self.proof.change.change_id,
+                &mut |p, m| budget.read(engine.fs(), p, m),
+            )?;
+            budget.tick()
+        } else {
+            engine.validate_manifest(manifest, &self.proof.change.change_id)
+        }
     }
 
     pub(crate) fn verify_selected(&self, after_only: bool, allow_mixed: bool) -> Result<()> {
@@ -2349,6 +2724,7 @@ fn require_authority(
                 change: proof.change.clone(),
                 starting: base.clone(),
                 intended,
+                intent_hash: proof.activation_binding()?,
             })
             || authority.publication() != &base
         {

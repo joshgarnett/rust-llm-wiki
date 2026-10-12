@@ -1136,3 +1136,139 @@ fn responses_mini_snapshot_finite_quote_preserves_global_outstanding_holds() {
     assert!(budgets::fits(&budgets::zero(), &holds, &allowance, &limits).is_err());
     assert_eq!(holds.cost.unwrap().nanounits(), 9_546_148_800);
 }
+
+#[test]
+fn reasoning_effort_maps_both_adapters_and_changes_settings_identity() {
+    for adapter in ["responses-v1", "chat-completions-v1"] {
+        let input = generation_input();
+        let base = case_with_adapter(
+            ServiceRole::Generate,
+            input.clone(),
+            "test-model",
+            "https://gateway.example/v1/generate",
+            "response_mode=\"json-schema\"\n",
+            |_| {},
+            adapter,
+        );
+        let omitted = genwire::prepare(
+            &base.trusted,
+            &base.spec.tasks[0],
+            &input,
+            DispatchPurpose::Task,
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&omitted.body).unwrap();
+        assert!(body.get("reasoning").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+        for effort in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+            let c = case_with_adapter(
+                ServiceRole::Generate,
+                input.clone(),
+                "test-model",
+                "https://gateway.example/v1/generate",
+                &format!("response_mode=\"json-schema\"\nreasoning_effort=\"{effort}\"\n"),
+                |_| {},
+                adapter,
+            );
+            let prepared =
+                genwire::prepare(&c.trusted, &c.spec.tasks[0], &input, DispatchPurpose::Task)
+                    .unwrap();
+            let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+            if adapter == "responses-v1" {
+                assert_eq!(body["reasoning"]["effort"], effort);
+                assert!(body.get("reasoning_effort").is_none());
+                assert_eq!(body["text"]["format"]["type"], "json_schema");
+            } else {
+                assert_eq!(body["reasoning_effort"], effort);
+                assert!(body.get("reasoning").is_none());
+                assert_eq!(body["response_format"]["type"], "json_schema");
+            }
+            assert_ne!(
+                base.spec.tasks[0].settings_hash,
+                c.spec.tasks[0].settings_hash
+            );
+            let WireContract::Generation(contract) = prepared.contract else {
+                panic!("generation contract")
+            };
+            assert_eq!(contract.reasoning_effort.unwrap().as_str(), effort);
+        }
+    }
+}
+
+#[test]
+fn explicit_effort_cannot_claim_pinned_nonreasoning_money_bounds_even_when_forged() {
+    for (adapter, model, endpoint) in [
+        (
+            "responses-v1",
+            "gpt-4.1-mini-2025-04-14",
+            "https://api.openai.com/v1/responses",
+        ),
+        (
+            "chat-completions-v1",
+            "gpt-4.1-2025-04-14",
+            "https://api.openai.com/v1/chat/completions",
+        ),
+    ] {
+        for effort in ["none", "low"] {
+            let input = generation_input();
+            let c = case_with_adapter(
+                ServiceRole::Generate,
+                input.clone(),
+                model,
+                endpoint,
+                &format!("reasoning_effort=\"{effort}\"\n"),
+                |_| {},
+                adapter,
+            );
+            let prepared =
+                genwire::prepare(&c.trusted, &c.spec.tasks[0], &input, DispatchPurpose::Task)
+                    .unwrap();
+            assert!(prepared.bound.quoted_allowance.is_none());
+            let WireContract::Generation(mut contract) = prepared.contract else {
+                panic!("generation contract")
+            };
+            assert!(matches!(contract.basis, BoundBasis::UnknownCompatible));
+            contract.basis = if adapter == "responses-v1" {
+                BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1
+            } else {
+                BoundBasis::OpenAiChatGpt41SnapshotV1
+            };
+            assert!(
+                super::wire::seal(
+                    &c.trusted,
+                    &c.spec.tasks[0],
+                    &input,
+                    DispatchPurpose::Task,
+                    ServiceRole::Generate,
+                    prepared.body,
+                    WireContract::Generation(contract)
+                )
+                .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn explicit_effort_incomplete_reasoning_usage_stays_paid_failure_and_unknown_money() {
+    let c = responses_case("test-model", "reasoning_effort=\"low\"\n");
+    let input = generation_input();
+    let prepared =
+        genwire::prepare(&c.trusted, &c.spec.tasks[0], &input, DispatchPurpose::Task).unwrap();
+    let value = json!({"object":"response","status":"incomplete","model":"test-model","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"reasoning"}],"usage":{"input_tokens":24,"input_tokens_details":{"cached_tokens":0},"output_tokens":16,"output_tokens_details":{"reasoning_tokens":16},"total_tokens":40}});
+    let error = genwire::decode(&prepared, &reply(&value)).err().unwrap();
+    assert_eq!(error.details["reason"], "incomplete_max_output_tokens");
+    let observed = genwire::observe(&prepared, &reply(&value));
+    let KnownOrUnknown::Known(usage) = observed.usage else {
+        panic!("observed usage")
+    };
+    assert_eq!(
+        usage.billable_units.get(&BillableClass::Output),
+        Some(&KnownOrUnknown::Known(0))
+    );
+    assert_eq!(
+        usage.billable_units.get(&BillableClass::Reasoning),
+        Some(&KnownOrUnknown::Known(16))
+    );
+    assert_eq!(observed.computed_cost, KnownOrUnknown::Unknown);
+}

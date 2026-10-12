@@ -66,6 +66,42 @@ pub(crate) struct GenerationOutput {
     pub response_hash: Blake3Hash,
 }
 
+pub(crate) fn output_id(attempt: &AttemptRef) -> Result<RecordId> {
+    RecordId::new(format!(
+        "run_event_generation_{}",
+        Blake3Hash::digest(packet::canonical_json(attempt)?).hex()
+    ))
+}
+
+/// Decode the existing immutable format without source discovery or publication
+/// authority. The caller must authenticate its reference and original guards.
+pub(crate) fn decode_output(bytes: &[u8]) -> Result<GenerationOutput> {
+    if bytes.len() > MAX_ARTIFACT_BYTES {
+        return Err(WikiError::invalid("generation output exceeds its ceiling"));
+    }
+    let note = parse_note(bytes);
+    let out: GenerationOutput = packet::decode(
+        packet::fenced_json(&note, OUTPUT_FENCE, MAX_ARTIFACT_BYTES)?,
+        MAX_ARTIFACT_BYTES,
+    )?;
+    let record = note
+        .canonical
+        .as_ref()
+        .ok_or_else(|| WikiError::invalid("generation output record"))?;
+    if out.version != 1
+        || out.attempt.number == 0
+        || out.attempt.task_key != out.task_key
+        || record.kind() != RecordKind::RunEvent
+        || record.id() != &output_id(&out.attempt)?
+        || record.string("wiki_run_id") != Some(out.attempt.run_id.as_str())
+        || record.string("wiki_event_type") != Some("generation_output")
+        || Blake3Hash::digest(out.response.as_bytes()) != out.response_hash
+    {
+        return Err(WikiError::invalid("generation output identity/binding"));
+    }
+    Ok(out)
+}
+
 pub(crate) fn output_write(
     vault: &RecordId,
     attempt: &AttemptRef,
@@ -73,10 +109,7 @@ pub(crate) fn output_write(
     response: &[u8],
     timestamp: &str,
 ) -> Result<(DurableOutputRef, ExpectedWrite)> {
-    let id = RecordId::new(format!(
-        "run_event_generation_{}",
-        Blake3Hash::digest(packet::canonical_json(attempt)?).hex()
-    ))?;
+    let id = output_id(attempt)?;
     let out = GenerationOutput {
         version: 1,
         task_key: attempt.task_key.clone(),
@@ -166,10 +199,7 @@ pub(crate) fn load_output(
     if record.id() != &reference.record.record_id || record.kind() != RecordKind::RunEvent {
         return Err(WikiError::invalid("generation output identity"));
     }
-    let out: GenerationOutput = packet::decode(
-        packet::fenced_json(&note, OUTPUT_FENCE, MAX_ARTIFACT_BYTES)?,
-        MAX_ARTIFACT_BYTES,
-    )?;
+    let out = decode_output(&bytes)?;
     if out.version != 1
         || out.task_key != task.key
         || out.attempt.task_key != task.key

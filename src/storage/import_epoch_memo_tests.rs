@@ -341,7 +341,7 @@ fn import_epoch_memo_error_unwind_and_disabled_scope_teardown() {
 #[test]
 #[cfg(unix)]
 fn import_epoch_memo_public_library_run_resume_own_and_release_scopes() {
-    use crate::app::{OfflineApp, OperationOptions, offline::init, prepare_source_import};
+    use crate::app::{OfflineApp, OperationOptions, prepare_source_import};
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("vault");
     let options = OperationOptions {
@@ -349,7 +349,14 @@ fn import_epoch_memo_public_library_run_resume_own_and_release_scopes() {
         lock_timeout_ms: 200,
         ..Default::default()
     };
-    init(&root, "Memo import fixture", options).unwrap();
+    // This test counts schema2 cleanup-epoch decoding. Build an actual legacy
+    // wiki before cleanup rather than using the current initializer's schema3.
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("WIKI.md"),
+        include_bytes!("../../tests/fixtures/bootstrap/vault/WIKI.md"),
+    )
+    .unwrap();
     let fs = VaultFs::new(VaultRoot::explicit(&root).unwrap());
     {
         let writer = WriterPermit::acquire(fs.root(), Duration::ZERO).unwrap();

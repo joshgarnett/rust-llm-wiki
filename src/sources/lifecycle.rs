@@ -65,7 +65,7 @@ impl SourceStore {
                 capture_state: None,
             });
         }
-        let changes = BTreeMap::from([
+        let mut changes = BTreeMap::from([
             ("wiki_status".into(), "withdrawn".into()),
             (
                 "wiki_withdrawn_at".into(),
@@ -73,16 +73,39 @@ impl SourceStore {
             ),
             ("wiki_withdrawal_reason".into(), reason.into()),
         ]);
+        let mut operations = Vec::new();
+        if crate::storage::layout::layout_kind(self.fs.root())?
+            == crate::storage::layout::LayoutKind::ReadableSources
+        {
+            let proposed = super::presentation_planning::proposed_source(note, &changes)?;
+            let presentation = super::presentation_planning::plan_change(
+                &proposed,
+                note.body(),
+                Some(note),
+                &[],
+                &BTreeSet::new(),
+                &mut |path, maximum| crate::changes::prepare::read_bounded(&self.fs, path, maximum),
+            )?;
+            changes.insert(
+                "wiki_presentation".into(),
+                presentation.plan.metadata.encode()?.into(),
+            );
+            for dependency in presentation.dependencies {
+                deps.insert(dependency.path, dependency.expected);
+            }
+            operations.extend(presentation.plan.writes);
+        }
         let bytes = edit_note(note, &changes, None, &note.source_hash)?;
         let read_preconditions = dependencies(deps);
+        operations.push(ExpectedWrite {
+            target: path.clone(),
+            expected: ExpectedState::Hash(note.source_hash.clone()),
+            proposed: Some(bytes),
+            apply_after: operations.iter().map(|op| op.target.clone()).collect(),
+        });
         let mut change = draft(
             format!("Withdraw {}", source.title()),
-            vec![ExpectedWrite {
-                target: path.clone(),
-                expected: ExpectedState::Hash(note.source_hash.clone()),
-                proposed: Some(bytes),
-                apply_after: vec![],
-            }],
+            operations,
             BTreeMap::new(),
         );
         change.read_preconditions = read_preconditions.clone();

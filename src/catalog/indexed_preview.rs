@@ -9,13 +9,28 @@ impl IndexedRefreshSession<'_> {
         if engine.load_indexed_refresh_proof(&proof.change)?.as_ref() != Some(proof) {
             return Err(recovery("preview lost its retained indexed proof"));
         }
-        let delta = load_delta(catalog, proof)?;
-        delta.require_bound(catalog, &engine, proof)?;
+        let graph_budget =
+            (proof.version == 5).then(super::super::graph_projection::GraphBudget::new);
+        let delta = if let Some(budget) = &graph_budget {
+            graph_admission::load_delta(catalog, proof, budget)?
+        } else {
+            load_delta(catalog, proof)?
+        };
+        delta.require_bound_with_budget(catalog, &engine, proof, graph_budget.as_ref())?;
         let (manifest, hash) = engine.load_manifest_structure(&proof.change.change_id)?;
         if hash != proof.change.manifest_hash {
             return Err(recovery("preview manifest binding changed"));
         }
-        engine.validate_manifest(&manifest, &proof.change.change_id)?;
+        if let Some(budget) = &graph_budget {
+            engine.validate_manifest_with_reader(
+                &manifest,
+                &proof.change.change_id,
+                &mut |p, m| budget.read(engine.fs(), p, m),
+            )?;
+            budget.tick()?;
+        } else {
+            engine.validate_manifest(&manifest, &proof.change.change_id)?;
+        }
         let journal_path = journal::journal_path(&proof.change.change_id)?;
         let journal_bytes = read_bounded(
             &catalog.fs,
@@ -52,6 +67,7 @@ impl IndexedRefreshSession<'_> {
                     change: proof.change.clone(),
                     starting: base.clone(),
                     intended,
+                    intent_hash: proof.activation_binding()?,
                 })
                 || authority.publication() != &base
             {

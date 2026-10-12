@@ -641,11 +641,22 @@ impl ChangeEngine {
         let retained = self.retained_graph_input(manifest, manifest_hash, &mut remaining)?;
         validator.validate_retained(&self.fs, input, &retained)
     }
-    pub(super) fn retained_graph_input(
+    pub(crate) fn retained_graph_input(
         &self,
         manifest: &ChangeManifest,
         manifest_hash: &Blake3Hash,
         remaining: &mut usize,
+    ) -> Result<RetainedGraphInput> {
+        self.retained_graph_input_with_reader(manifest, manifest_hash, remaining, &mut |p, m| {
+            super::prepare::read_bounded(&self.fs, p, m)
+        })
+    }
+    pub(crate) fn retained_graph_input_with_reader(
+        &self,
+        manifest: &ChangeManifest,
+        manifest_hash: &Blake3Hash,
+        remaining: &mut usize,
+        reader: &mut crate::storage::layout::RawReader<'_>,
     ) -> Result<RetainedGraphInput> {
         Ok(RetainedGraphInput {
             change_id: manifest.change_id.clone(),
@@ -655,13 +666,23 @@ impl ChangeEngine {
                 .clone()
                 .ok_or_else(|| WikiError::invalid("retained graph origin missing"))?,
             allocated_ids: manifest.allocated_ids.clone(),
-            operations: self.retained_graph_operations(manifest, remaining)?,
+            operations: self.retained_graph_operations_with_reader(manifest, remaining, reader)?,
         })
     }
     pub(super) fn retained_graph_operations(
         &self,
         manifest: &ChangeManifest,
         remaining: &mut usize,
+    ) -> Result<Vec<RetainedGraphOperation>> {
+        self.retained_graph_operations_with_reader(manifest, remaining, &mut |p, m| {
+            super::prepare::read_bounded(&self.fs, p, m)
+        })
+    }
+    fn retained_graph_operations_with_reader(
+        &self,
+        manifest: &ChangeManifest,
+        remaining: &mut usize,
+        reader: &mut crate::storage::layout::RawReader<'_>,
     ) -> Result<Vec<RetainedGraphOperation>> {
         let mut operations = Vec::with_capacity(manifest.operations.len());
         for (index, operation) in manifest.operations.iter().enumerate() {
@@ -678,13 +699,14 @@ impl ChangeEngine {
                         "retained graph witness exceeds byte ceiling",
                     ));
                 }
-                let bytes = self.verify_payload_with_limit(
+                let bytes = self.verify_payload_with_reader(
                     &manifest.change_id,
                     index,
                     label,
                     &operation.target,
                     (expected, reference),
                     *remaining,
+                    reader,
                 )?;
                 *remaining = remaining
                     .checked_sub(bytes.as_ref().map_or(0, Vec::len))
@@ -1013,8 +1035,11 @@ fn document_map(input: &ValidationInput) -> BTreeMap<VaultRelativePath, Blake3Ha
 }
 pub(crate) fn projected_scan(input: &ValidationInput) -> BTreeMap<VaultRelativePath, Blake3Hash> {
     let mut expected = document_map(input);
+    let layout = crate::storage::layout::input_layout_kind(input);
     for target in &input.overlay {
-        if canonical_target(&target.path) {
+        if canonical_target(&target.path)
+            && !crate::storage::layout::presentation_path_excluded(layout, &target.path)
+        {
             match &target.bytes {
                 Some(bytes) => {
                     expected.insert(target.path.clone(), Blake3Hash::digest(bytes));
@@ -1076,4 +1101,258 @@ pub(super) fn verify_legacy_validation_receipt(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod source_layout_membership_tests {
+    use super::*;
+    use crate::{
+        catalog::{Catalog, CatalogGraphValidator, scan},
+        domain::{RecordId, RecordKind},
+        sources::{CaptureRequest, ExtractionInput, SourceOrigin, SourceStore, SourceView},
+        vault::{VaultFs, VaultRoot},
+    };
+    use std::{
+        fs,
+        sync::atomic::{AtomicBool, Ordering},
+        time::Duration,
+    };
+
+    fn path(value: &str) -> VaultRelativePath {
+        VaultRelativePath::new(value).unwrap()
+    }
+    fn marker(schema: &str, id: &str) -> Vec<u8> {
+        format!("---\nwiki_schema: '{schema}'\nwiki_kind: vault\nwiki_id: {id}\ntitle: Membership\n---\n").into_bytes()
+    }
+    fn fixture(readable: bool) -> (tempfile::TempDir, VaultFs) {
+        let temp = tempfile::tempdir().unwrap();
+        let before = marker("1", "vault_membership");
+        let after = if readable {
+            let (after, authority) =
+                crate::storage::source_layout::bootstrap_files(&before).unwrap();
+            for (path, bytes) in authority {
+                let file = temp.path().join(path.as_str());
+                fs::create_dir_all(file.parent().unwrap()).unwrap();
+                fs::write(file, bytes).unwrap();
+            }
+            after
+        } else {
+            before
+        };
+        fs::write(temp.path().join("WIKI.md"), after).unwrap();
+        let vault = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+        (temp, vault)
+    }
+    fn request() -> CaptureRequest {
+        CaptureRequest {
+            title: "Readable source".into(),
+            origin_kind: SourceOrigin::LocalFile,
+            origin: "fixture.txt".into(),
+            original: b"One exact capture.\n".to_vec(),
+            extraction: ExtractionInput::Utf8Preserve,
+            media_type: Some("text/plain".into()),
+        }
+    }
+    #[test]
+    fn planned_capture_membership_matches_physical_scan_and_keeps_legacy_authored_views() {
+        for readable in [false, true] {
+            let (_temp, vault) = fixture(readable);
+            let id = RecordId::new("vault_membership").unwrap();
+            let capture = SourceStore::new(vault.clone())
+                .plan_capture(request())
+                .unwrap();
+            let mut input = scan::scan_input(&vault, &id).unwrap();
+            input.overlay = capture
+                .draft
+                .unwrap()
+                .operations
+                .into_iter()
+                .map(|operation| ProposedTarget {
+                    path: operation.target,
+                    bytes: operation.proposed,
+                })
+                .collect();
+            if !readable {
+                input.overlay.push(ProposedTarget {
+                    path: path("sources/views/authored.md"),
+                    bytes: Some(b"An ordinary legacy note.\n".to_vec()),
+                });
+            }
+            let planned = projected_scan(&input);
+            assert_eq!(
+                scan::input_notes(&input)
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+                planned.keys().cloned().collect()
+            );
+            let view = SourceView::from_input(&vault, &input).unwrap();
+            assert_eq!(
+                view.notes.keys().cloned().collect::<BTreeSet<_>>(),
+                planned.keys().cloned().collect()
+            );
+            let display = input
+                .overlay
+                .iter()
+                .find(|target| target.path.as_str().starts_with("sources/views/"))
+                .unwrap();
+            assert_eq!(planned.contains_key(&display.path), !readable);
+            assert!(
+                view.overlay.contains_key(&display.path),
+                "display remains available to exact guarded reads"
+            );
+            for target in &input.overlay {
+                let file = vault.root().resolve(&target.path).unwrap();
+                fs::create_dir_all(file.parent().unwrap()).unwrap();
+                fs::write(file, target.bytes.as_ref().unwrap()).unwrap();
+            }
+            let observed = scan::scan_input(&vault, &id).unwrap();
+            assert_eq!(document_map(&observed), planned);
+            fs::write(
+                vault.root().path().join("unexpected.md"),
+                b"An external author note.\n",
+            )
+            .unwrap();
+            assert_ne!(
+                document_map(&scan::scan_input(&vault, &id).unwrap()),
+                planned
+            );
+        }
+    }
+    #[test]
+    fn only_exact_base_marker_grants_display_exclusion_and_frontmatter_is_not_authority() {
+        let (_temp, vault) = fixture(true);
+        let mut valid =
+            scan::scan_input(&vault, &RecordId::new("vault_membership").unwrap()).unwrap();
+        let display = path("sources/views/claimed.md");
+        valid.overlay.push(ProposedTarget {
+            path: display.clone(),
+            bytes: Some(marker("3", "vault_membership")),
+        });
+        assert!(!projected_scan(&valid).contains_key(&display));
+        assert!(!scan::input_notes(&valid).unwrap().contains_key(&display));
+        assert!(
+            !SourceView::from_input(&vault, &valid)
+                .unwrap()
+                .notes
+                .contains_key(&display)
+        );
+        for case in [
+            "absent",
+            "wrong-id",
+            "hash",
+            "unrecognized",
+            "malformed",
+            "duplicate",
+            "overlay-only",
+        ] {
+            let mut input = valid.clone();
+            match case {
+                "absent" => input.documents.clear(),
+                "wrong-id" => input.vault_id = RecordId::new("vault_other").unwrap(),
+                "hash" => input.documents[0].hash = Blake3Hash::digest(b"other bytes"),
+                "unrecognized" | "malformed" | "overlay-only" => {
+                    input.documents[0].bytes = match case {
+                        "unrecognized" => marker("99", "vault_membership"),
+                        "malformed" => b"not a marker".to_vec(),
+                        _ => marker("1", "vault_membership"),
+                    };
+                    input.documents[0].hash = Blake3Hash::digest(&input.documents[0].bytes);
+                    if case == "overlay-only" {
+                        input.overlay.push(ProposedTarget {
+                            path: path("WIKI.md"),
+                            bytes: Some(marker("3", "vault_membership")),
+                        });
+                    }
+                }
+                "duplicate" => input.documents.push(input.documents[0].clone()),
+                _ => unreachable!(),
+            }
+            assert!(
+                projected_scan(&input).contains_key(&display),
+                "{case} granted exclusion"
+            );
+            assert!(!crate::storage::layout::presentation_path_excluded(
+                crate::storage::layout::input_layout_kind(&input),
+                &display
+            ));
+        }
+    }
+    #[test]
+    fn external_canonical_insertion_still_conflicts_during_real_storage3_capture() {
+        struct InsertAuthorNote(AtomicBool);
+        impl InsertAuthorNote {
+            fn after(
+                &self,
+                vault: &VaultFs,
+                result: Result<ValidatedGraph>,
+            ) -> Result<ValidatedGraph> {
+                if result.is_ok() && self.0.swap(false, Ordering::SeqCst) {
+                    fs::write(
+                        vault.root().path().join("external.md"),
+                        b"Preserve this external note.\n",
+                    )
+                    .unwrap();
+                }
+                result
+            }
+        }
+        impl GraphValidator for InsertAuthorNote {
+            fn validate(&self, vault: &VaultFs, input: &ValidationInput) -> Result<ValidatedGraph> {
+                self.after(vault, CatalogGraphValidator.validate(vault, input))
+            }
+            fn validate_retained(
+                &self,
+                vault: &VaultFs,
+                input: &ValidationInput,
+                retained: &RetainedGraphInput,
+            ) -> Result<ValidatedGraph> {
+                self.after(
+                    vault,
+                    CatalogGraphValidator.validate_retained(vault, input, retained),
+                )
+            }
+        }
+        let (_temp, vault) = fixture(true);
+        let engine = ChangeEngine::new(vault.clone()).unwrap();
+        let writer = WriterPermit::acquire(vault.root(), Duration::ZERO).unwrap();
+        let draft = SourceStore::new(vault.clone())
+            .plan_capture(request())
+            .unwrap()
+            .draft
+            .unwrap();
+        let change = engine.prepare(&writer, draft).unwrap().prepared;
+        let catalog = Catalog::new(vault.clone(), RecordId::new("vault_membership").unwrap());
+        let error = engine
+            .apply(
+                &writer,
+                &change,
+                &InsertAuthorNote(AtomicBool::new(true)),
+                &catalog,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::ContentConflict);
+        assert!(
+            error
+                .message
+                .contains("canonical scan changed during application"),
+            "{error:?}"
+        );
+        assert_eq!(
+            fs::read(vault.root().path().join("external.md")).unwrap(),
+            b"Preserve this external note.\n"
+        );
+        let source = scan::scan_input(&vault, &engine.vault_id).unwrap();
+        assert_eq!(
+            source
+                .documents
+                .iter()
+                .filter(|document| crate::records::parse_note(&document.bytes)
+                    .canonical
+                    .is_some_and(|record| record.kind() == RecordKind::Source))
+                .count(),
+            1
+        );
+    }
 }

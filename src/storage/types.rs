@@ -78,3 +78,52 @@ pub struct StorageReport {
     pub warnings: Vec<String>,
     pub backup: String,
 }
+
+/// Explicit, preserve-all upgrade to the recommended readable-source layout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceLayoutOptions {
+    pub max_files: usize,
+    pub max_bytes: u64,
+    pub expected_plan: Option<Blake3Hash>,
+}
+impl Default for SourceLayoutOptions {
+    fn default() -> Self {
+        let options = StorageOptions::default();
+        Self {
+            max_files: options.max_files,
+            max_bytes: options.max_bytes,
+            expected_plan: None,
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceLayoutPlan {
+    pub vault_id: RecordId,
+    pub plan_hash: Blake3Hash,
+    pub from_layout: u32,
+    pub to_layout: u32,
+    pub complete: bool,
+    pub sources: usize,
+    pub historical_copies: usize,
+    pub authored_link_edits: usize,
+    pub planned_copy_bytes: u64,
+    pub retained_backup_bytes: u64,
+    pub rendered_bytes: u64,
+    pub required_free_bytes: u64,
+    pub blockers: Vec<String>,
+    pub warnings: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceLayoutReport {
+    pub operation_id: RecordId,
+    pub resumed: bool,
+    pub layout_version: u32,
+    pub sources: usize,
+    pub historical_copies: usize,
+    pub authored_link_edits: usize,
+    pub copied_bytes: u64,
+    pub rendered_bytes: u64,
+    pub backup: Option<String>,
+    pub warnings: Vec<String>,
+}

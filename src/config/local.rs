@@ -1053,9 +1053,9 @@ pub fn resolve_loaded(
                 .origins
                 .insert("profile_permitted".into(), "user_config".into());
         }
-        if !result.profile_permitted {
-            result.warnings.push(format!("selected profile {profile:?} is not listed in local preferences; provider authorization is checked separately before remote work"));
-        }
+        // This preference controls explicit provider work. Automatic embedding
+        // consent is checked separately against the selected wiki and endpoint.
+        // Absence here is not itself an error or a reason to warn on local reads.
     }
     Ok(result)
 }

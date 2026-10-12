@@ -55,6 +55,9 @@ pub struct ProviderSetArguments {
     /// Generation model's maximum output tokens.
     #[arg(long)]
     pub max_output_tokens: Option<u64>,
+    /// Generation reasoning effort; default removes the setting. Support depends on your provider/model.
+    #[arg(long, value_parser = ["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"])]
+    pub reasoning_effort: Option<String>,
     /// Environment variable holding the key. Its name is saved for provider requests.
     #[arg(long, conflicts_with_all = ["key_file", "credential_command", "reuse_auth"])]
     pub key_env: Option<String>,
@@ -108,6 +111,11 @@ fn patch(settings: &ProviderSetArguments) -> Result<ProviderRolePatch> {
         .transpose()?;
     patch.dimensions = settings.dimensions.clone();
     patch.max_output_tokens = settings.max_output_tokens;
+    patch.reasoning_effort = settings
+        .reasoning_effort
+        .as_deref()
+        .map(setup::reasoning_effort)
+        .transpose()?;
     if [
         settings.key_env.is_some(),
         settings.key_file.is_some(),
@@ -144,6 +152,11 @@ fn patch(settings: &ProviderSetArguments) -> Result<ProviderRolePatch> {
             "--dimensions changes embedding vectors; use config set embedding",
         ));
     }
+    if patch.role == ProviderRole::Embedding && patch.reasoning_effort.is_some() {
+        return Err(setup::usage(
+            "--reasoning-effort changes generation; use config set generation",
+        ));
+    }
     if patch.role == ProviderRole::Embedding && patch.max_output_tokens.is_some() {
         return Err(setup::usage(
             "--max-output-tokens changes generation output; use config set generation",
@@ -170,7 +183,7 @@ fn collect<R: io::BufRead, W: Write>(
         if choices.role == ProviderRoleArgument::Embedding {
             "Setting to change (model/url/credentials/dimensions)"
         } else {
-            "Setting to change (model/url/credentials/max-output-tokens)"
+            "Setting to change (model/url/credentials/max-output-tokens/reasoning-effort)"
         },
         Some("model"),
     )?;
@@ -187,6 +200,14 @@ fn collect<R: io::BufRead, W: Write>(
                     .parse()
                     .map_err(|_| setup::usage("enter a positive output token limit"))?,
             )
+        }
+        "reasoning-effort" if choices.role == ProviderRoleArgument::Generation => {
+            let effort = prompts.text(
+                "Reasoning effort (default/none/minimal/low/medium/high/xhigh/max)",
+                Some("default"),
+            )?;
+            setup::reasoning_effort(&effort)?;
+            choices.reasoning_effort = Some(effort);
         }
         "credentials" => loop {
             match prompts

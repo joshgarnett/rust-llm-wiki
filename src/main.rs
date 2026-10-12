@@ -1,6 +1,6 @@
 use clap::Parser;
 use lwiki::{
-    cli::{Arguments, OutputFormat, execute, present, present_with_wiki},
+    cli::{Arguments, OutputFormat, execute, human_warning, present, present_detailed},
     output::Envelope,
 };
 use serde_json::json;
@@ -174,7 +174,13 @@ fn main() {
             );
         }
         for warning in &envelope.warnings {
-            eprintln!("Warning: {warning}");
+            if envelope.command == "search" {
+                if let Some(warning) = human_warning(warning, args.verbose) {
+                    eprintln!("Warning: {warning}");
+                }
+            } else {
+                eprintln!("Warning: {warning}");
+            }
         }
         if envelope.meta.partial && !matches!(envelope.command.as_str(), "search" | "read") {
             eprintln!(
@@ -191,18 +197,20 @@ fn main() {
             serde_json::to_value(&envelope).expect("serializable envelope"),
         )
     } else if format == OutputFormat::Human && !envelope.ok {
-        present_with_wiki(
+        present_detailed(
             &envelope,
             format,
             &mut io::stderr().lock(),
             args.wiki.as_deref(),
+            args.verbose,
         )
     } else {
-        present_with_wiki(
+        present_detailed(
             &envelope,
             format,
             &mut io::stdout().lock(),
             args.wiki.as_deref(),
+            args.verbose,
         )
     };
     if output_result.is_err() {

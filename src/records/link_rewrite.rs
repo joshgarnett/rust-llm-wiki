@@ -84,18 +84,33 @@ pub(crate) fn rewrite_links_selected(
     target: &RecordId,
     to: &VaultRelativePath,
 ) -> Result<Vec<u8>> {
+    rewrite_link_destinations(body, &mut |destination, _| {
+        let LinkResolution::Resolved { id, fragment, .. } = resolve(destination)? else {
+            return Ok(None);
+        };
+        if &id != target {
+            return Ok(None);
+        }
+        Ok(Some(fragment.map_or_else(
+            || to.as_str().to_owned(),
+            |fragment| format!("{to}#{fragment}"),
+        )))
+    })
+}
+
+/// Lossless splicing over a caller-authenticated, transient navigation decision.
+pub(crate) fn rewrite_link_destinations(
+    body: &str,
+    replacement: &mut dyn FnMut(&str, LinkSyntax) -> Result<Option<String>>,
+) -> Result<Vec<u8>> {
     let mut edits = Vec::new();
     let mut reference_destinations = BTreeSet::new();
     let original_links = extract_links(body);
     let mut expected = Vec::new();
     for (index, link) in original_links.iter().enumerate() {
-        let LinkResolution::Resolved { id, fragment, .. } = resolve(&link.destination)? else {
+        let Some(new_dest) = replacement(&link.destination, link.syntax)? else {
             continue;
         };
-        if &id != target {
-            continue;
-        }
-        let new_dest = fragment.map_or_else(|| to.as_str().to_owned(), |f| format!("{to}#{f}"));
         expected.push((index, new_dest.clone()));
         let raw = &body[link.range.clone()];
         let local = match link.syntax {

@@ -65,10 +65,17 @@ impl PolicyInputAccess for Work<'_> {
 }
 
 pub(super) fn project_policy(work: &mut Work<'_>) -> Result<PolicyDelta> {
+    let readable_sources = crate::storage::layout::layout_kind(work.fs.root())?
+        == crate::storage::layout::LayoutKind::ReadableSources;
     let mut before = BTreeMap::new();
     let mut overlay = BTreeMap::new();
     for (path, bytes) in &work.overlay {
-        if canonical_path(path) {
+        if canonical_path(path)
+            && !(readable_sources
+                && path
+                    .as_str()
+                    .starts_with(crate::domain::source_presentation::PRESENTATION_PREFIX))
+        {
             if let Some(old) = work.captured.get(path) {
                 before.insert(path.clone(), parse_note(&old.bytes));
             }
@@ -79,10 +86,17 @@ pub(super) fn project_policy(work: &mut Work<'_>) -> Result<PolicyDelta> {
 }
 
 pub(super) fn project_source_refresh_batch_policy(work: &mut Work<'_>) -> Result<PolicyDelta> {
+    let readable_sources = crate::storage::layout::layout_kind(work.fs.root())?
+        == crate::storage::layout::LayoutKind::ReadableSources;
     let mut before = BTreeMap::new();
     let mut overlay = BTreeMap::new();
     for (path, bytes) in &work.overlay {
-        if canonical_path(path) {
+        if canonical_path(path)
+            && !(readable_sources
+                && path
+                    .as_str()
+                    .starts_with(crate::domain::source_presentation::PRESENTATION_PREFIX))
+        {
             if let Some(old) = work.captured.get(path) {
                 before.insert(path.clone(), parse_note(&old.bytes));
             }
@@ -141,6 +155,26 @@ pub(crate) fn project_pages(
     project_selected(fs, reader, draft, None, false, limits)
 }
 
+pub(crate) fn project_pages_with_sources(
+    fs: &VaultFs,
+    reader: &QuerySnapshot,
+    draft: ChangeDraft,
+    sources: Vec<crate::changes::indexed_refresh::IndexedSourcePresentationTarget>,
+    limits: &RefreshProjectionLimits,
+) -> Result<Option<ProjectedWrite>> {
+    project_selected(
+        fs,
+        reader,
+        draft,
+        Some(IndexedWriteOperation::PageWithSources {
+            pages: vec![],
+            sources,
+        }),
+        false,
+        limits,
+    )
+}
+
 /// Only authenticated committed Page replacements may carry inverse ancestry.
 pub(crate) fn project_page_inverse(
     fs: &VaultFs,
@@ -176,7 +210,8 @@ fn project_selected(
     }
     if draft.origin.is_some()
         || (draft.inverse_of.is_some() != page_inverse)
-        || (job.is_none() && !draft.allocated_ids.is_empty())
+        || (!matches!(job, Some(IndexedWriteOperation::JobBatch { .. }))
+            && !draft.allocated_ids.is_empty())
         || draft.title.trim().is_empty()
         || draft.title.len() > 4096
     {
@@ -185,7 +220,12 @@ fn project_selected(
         ));
     }
     if draft.operations.is_empty()
-        || draft.operations.len() > 16
+        || draft.operations.len()
+            > if matches!(job, Some(IndexedWriteOperation::PageWithSources { .. })) {
+                64
+            } else {
+                16
+            }
         || draft.read_preconditions.len() > 128
     {
         return Err(budget());
@@ -201,9 +241,58 @@ fn project_selected(
         return Err(budget());
     }
     let mut work = Work::new(fs, reader, limits)?;
+    let readable_sources = crate::storage::layout::layout_kind(fs.root())?
+        == crate::storage::layout::LayoutKind::ReadableSources;
     work.capture_path(&VaultRelativePath::new("WIKI.md")?)?;
     for dependency in &draft.read_preconditions {
         work.capture(&dependency.path, &dependency.expected)?;
+    }
+    let mut presentation_paths = BTreeSet::new();
+    if let Some(IndexedWriteOperation::PageWithSources { sources, .. }) = &job {
+        for target in sources {
+            work.require(&target.source_id)?;
+            let old = work.now[&target.source_id].clone();
+            let operation = draft
+                .operations
+                .iter()
+                .find(|operation| operation.target == old.path)
+                .ok_or_else(|| conflict("cited Source update missing"))?;
+            if operation.expected != ExpectedState::Hash(old.hash.clone()) {
+                return Err(conflict("cited Source predecessor changed"));
+            }
+            let before = parse_note(&work.captured[&old.path].bytes);
+            let after = parse_note(
+                operation
+                    .proposed
+                    .as_deref()
+                    .ok_or_else(|| conflict("cited Source cannot be deleted"))?,
+            );
+            let record = after
+                .canonical
+                .as_ref()
+                .ok_or_else(|| conflict("cited Source proposal is invalid"))?;
+            if before.body() != after.body()
+                || old
+                    .record
+                    .fields()
+                    .iter()
+                    .filter(|(key, _)| key.as_str() != "wiki_presentation")
+                    .ne(record
+                        .fields()
+                        .iter()
+                        .filter(|(key, _)| key.as_str() != "wiki_presentation"))
+            {
+                return Err(conflict(
+                    "cited Source publication changes fields outside presentation ownership",
+                ));
+            }
+            presentation_paths.extend(work.verify_presentation(
+                Some(&before),
+                &after,
+                &draft.operations,
+                &target.revisions.iter().cloned().collect(),
+            )?);
+        }
     }
     let mut paths = BTreeSet::new();
     let mut identities = BTreeSet::new();
@@ -211,6 +300,20 @@ fn project_selected(
     let mut changed = Vec::new();
     for operation in &draft.operations {
         work.tick()?;
+        if presentation_paths.contains(&operation.target) {
+            let bytes = operation
+                .proposed
+                .as_ref()
+                .ok_or_else(|| conflict("saved-note deletion is not admitted"))?;
+            if !paths.insert(operation.target.clone()) {
+                return Err(conflict("duplicate saved-note target"));
+            }
+            work.charge(bytes.len())?;
+            work.capture(&operation.target, &operation.expected)?;
+            work.overlay.insert(operation.target.clone(), bytes.clone());
+            changed.push(operation.clone());
+            continue;
+        }
         if let Some(IndexedWriteOperation::JobBatch {
             checkpoint: Some(asset),
             ..
@@ -237,6 +340,11 @@ fn project_selected(
             continue;
         }
         if !canonical_path(&operation.target)
+            || readable_sources
+                && operation
+                    .target
+                    .as_str()
+                    .starts_with(crate::domain::source_presentation::PRESENTATION_PREFIX)
             || (job.is_none() && !operation.apply_after.is_empty())
             || !paths.insert(operation.target.clone())
         {
@@ -260,6 +368,10 @@ fn project_selected(
                             && target.id == *r.id()
                             && target.kind == r.kind()
                     })
+                } else if let Some(IndexedWriteOperation::PageWithSources { sources, .. }) = &job {
+                    r.kind() == RecordKind::Page
+                        || r.kind() == RecordKind::Source
+                            && sources.iter().any(|source| source.source_id == *r.id())
                 } else {
                     r.kind() == RecordKind::Page
                 }
@@ -346,11 +458,43 @@ fn project_selected(
 }
 
 fn finish_pages(
+    work: Work<'_>,
+    draft: ChangeDraft,
+    pages: Vec<IndexedPageTarget>,
+    job: Option<IndexedWriteOperation>,
+    external: bool,
+) -> Result<Option<ProjectedWrite>> {
+    finish_selected(work, draft, pages, job, external, None, None)
+}
+
+pub(super) fn finish_graph(
+    work: Work<'_>,
+    draft: ChangeDraft,
+    targets: Vec<IndexedPageTarget>,
+    operation: IndexedWriteOperation,
+    change: &crate::changes::PreparedChange,
+    budget: &super::graph_projection::GraphBudget,
+) -> Result<ProjectedWrite> {
+    finish_selected(
+        work,
+        draft,
+        targets,
+        Some(operation),
+        false,
+        Some(change),
+        Some(budget),
+    )?
+    .ok_or_else(|| WikiError::invalid("graph projection unexpectedly empty"))
+}
+
+fn finish_selected(
     mut work: Work<'_>,
     draft: ChangeDraft,
     mut pages: Vec<IndexedPageTarget>,
     job: Option<IndexedWriteOperation>,
     external: bool,
+    graph_change: Option<&crate::changes::PreparedChange>,
+    graph_budget: Option<&super::graph_projection::GraphBudget>,
 ) -> Result<Option<ProjectedWrite>> {
     let mut draft = draft;
     let base = QueryCatalog::snapshot(work.reader).clone();
@@ -404,24 +548,64 @@ fn finish_pages(
         policy_projection::project_policy_for_external_pages(
             reader, &before, &overlay, &removed, &mut work,
         )?
+    } else if matches!(job, Some(IndexedWriteOperation::GraphBatch { .. })) {
+        let before = work
+            .overlay
+            .keys()
+            .filter_map(|path| {
+                work.captured
+                    .get(path)
+                    .map(|old| (path.clone(), parse_note(&old.bytes)))
+            })
+            .collect();
+        let overlay = work
+            .overlay
+            .iter()
+            .map(|(path, bytes)| (path.clone(), parse_note(bytes)))
+            .collect();
+        let scope = work
+            .graph_replacements
+            .as_ref()
+            .ok_or_else(|| WikiError::invalid("graph projection lacks admitted registry scope"))?
+            .clone();
+        policy_projection::project_policy_for_graph(reader, &before, &overlay, &scope, &mut work)?
     } else {
         project_policy(&mut work)?
     };
     let mut delta = empty_delta(policy.clone());
     let structural = structural_projection::recompute(&mut work, seeds, &policy, &mut delta)?;
     work.discover(structural.clone())?;
+    if let Some(IndexedWriteOperation::GraphBatch { action, .. }) = &job {
+        super::graph_projection::verify_overlay(
+            &mut work,
+            &draft,
+            graph_change
+                .ok_or_else(|| WikiError::invalid("graph projection lacks retained change"))?,
+            *action,
+            graph_budget.ok_or_else(|| WikiError::invalid("graph verification budget missing"))?,
+        )?;
+    }
     work.recompute()?;
     for id in &structural {
         let old: BTreeSet<_> = reader
             .outgoing_edges(
                 id,
-                &[super::eligibility_facts::EligibilityRole::GenerationPacket],
+                &[
+                    super::eligibility_facts::EligibilityRole::GenerationPacket,
+                    super::eligibility_facts::EligibilityRole::AssertionEvidence,
+                ],
             )?
             .into_iter()
             .collect();
         let new: BTreeSet<_> = work.edge_overrides[id]
             .iter()
-            .filter(|edge| edge.role == super::eligibility_facts::EligibilityRole::GenerationPacket)
+            .filter(|edge| {
+                matches!(
+                    edge.role,
+                    super::eligibility_facts::EligibilityRole::GenerationPacket
+                        | super::eligibility_facts::EligibilityRole::AssertionEvidence
+                )
+            })
             .cloned()
             .collect();
         delta
@@ -615,6 +799,11 @@ fn finish_pages(
     if !external {
         work.recheck()?;
     }
+    if let Some(budget) = graph_budget {
+        budget.projection_bytes.set(work.bytes);
+        budget.projection_visits.set(work.visits);
+        budget.tick()?;
+    }
     Ok(Some(ProjectedWrite {
         parts: ProjectedWriteParts {
             operation: match job {
@@ -630,7 +819,19 @@ fn finish_pages(
                         .collect(),
                     checkpoint,
                 },
-                Some(_) => unreachable!("sealed job operation"),
+                Some(IndexedWriteOperation::PageWithSources { sources, .. }) => {
+                    IndexedWriteOperation::PageWithSources {
+                        pages: pages
+                            .into_iter()
+                            .filter(|page| {
+                                !sources.iter().any(|source| source.source_id == page.id)
+                            })
+                            .collect(),
+                        sources,
+                    }
+                }
+                Some(operation @ IndexedWriteOperation::GraphBatch { .. }) => operation,
+                Some(_) => unreachable!("sealed selected operation"),
                 None => IndexedWriteOperation::PageBatch { pages },
             },
             draft,

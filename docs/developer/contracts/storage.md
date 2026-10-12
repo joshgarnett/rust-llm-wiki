@@ -240,6 +240,47 @@ Cleanup retains an exact archived epoch before activation/deletion, validates it
 
 Back up and restore the entire vault, including `.wiki/state` and `.wiki/retained`; `.wiki/cache` is rebuildable but operational state is not. `STORAGE.md` produced by migration explains logical inspect/read commands and the backup boundary. Local fault injection and process restart tests establish only their tested macOS filesystem observations, not power-loss safety or other-platform durability. [Current coverage](../current-contracts.md) and [cleanup guide](../validation-status.md#workflow-and-recovery) route actual gates.
 
+## Readable sources and storage schema 3
+
+New initialization uses storage schema 3. Canonical Source records and immutable
+revision trees retain their logical paths and IDs, with physical storage under
+`.wiki/retained/sources/`. Human navigation uses owned title-based notes in
+`sources/views/`, with full historical notes created when published links need
+them. Current and historical anchors never change evidence coordinates. These
+display copies are excluded from canonical discovery and embedding inputs.
+Capture, refresh, cited Page publication and withdrawal update their affected
+display files in the same guarded change. Unexpected edits to an owned display
+conflict and remain preserved.
+
+`storage migrate` explicitly moves storage 1 or 2 to this arrangement. Dry-run
+checks the plan without writes. Migration preserves all history; it does not
+apply cleanup's undo-retention policy. Under the writer and existing Run locks,
+it binds the original inventory, before-images, exact rewritten links, rendered
+notes and activation. Known links in visible authored Markdown, including
+`index.md` and case-insensitive `.md`/`.markdown` extensions, are rewritten without
+adopting previously excluded records. Immutable captures and historical payloads
+are never rewritten. Unsupported known destinations block before mutation.
+Active provider work whose immutable guards would change also blocks migration;
+unknown charges and retained accounting are not discarded.
+
+The full snapshot is retained at
+`.wiki/retained/source-layout-backups/<operation>/`: `vault/` contains original
+files at their original relative paths, and `marker/WIKI.before` contains the
+original marker. Restore both into a separate root, naming that marker `WIKI.md`.
+This fixed exception avoids a nested wiki in retained storage. Only `.git` and
+ephemeral writer-lock diagnostics are excluded from the snapshot. Before guarded
+removal of relocated files, migration rechecks complete membership and hashes.
+A pending epoch blocks ordinary mutation; retry resumes that exact migration
+and finishes catalog publication. Cleanup cannot replace a pending migration.
+
+Initialization stages and syncs the small schema 3 authority before publishing
+`WIKI.md` with absent-only replacement. Before the marker exists, retry accepts
+only the exact bounded empty bootstrap receipt and owned path closure. It cannot
+adopt an arbitrary `.wiki` tree. Omitted title reuses the stored identity and
+title; a conflicting explicit title refuses. Existing author files and Obsidian
+settings remain unchanged. This protocol does not claim power-loss safety beyond
+the separately recorded native filesystem evidence.
+
 ## Complete derived-cache loss
 
 

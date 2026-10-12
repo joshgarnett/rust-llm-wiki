@@ -11,13 +11,17 @@ pub use super::types::{DEFAULT_READ_BYTES, MAX_INPUT_BYTES};
 
 enum PageWriteInput {
     Ordinary(ChangeDraft),
+    WithSources(
+        ChangeDraft,
+        Vec<crate::changes::indexed_refresh::IndexedSourcePresentationTarget>,
+    ),
     Inverse(crate::changes::rollback::ValidatedPageInverse),
 }
 
 impl PageWriteInput {
     fn draft(&self) -> &ChangeDraft {
         match self {
-            Self::Ordinary(draft) => draft,
+            Self::Ordinary(draft) | Self::WithSources(draft, _) => draft,
             Self::Inverse(inverse) => inverse.draft(),
         }
     }
@@ -519,6 +523,18 @@ impl OfflineApp {
         self.execute_page_input(PageWriteInput::Ordinary(draft), false)
     }
 
+    pub(crate) fn execute_cited_page_draft(
+        &self,
+        draft: ChangeDraft,
+        sources: Vec<crate::changes::indexed_refresh::IndexedSourcePresentationTarget>,
+    ) -> Result<MutationOutcome> {
+        if sources.is_empty() {
+            self.execute_page_draft(draft)
+        } else {
+            self.execute_page_input(PageWriteInput::WithSources(draft, sources), false)
+        }
+    }
+
     fn execute_page_input(
         &self,
         input: PageWriteInput,
@@ -533,7 +549,9 @@ impl OfflineApp {
         let catalog = self.catalog();
         if catalog.operation_state()?.is_none() {
             return match input {
-                PageWriteInput::Ordinary(draft) => self.execute_draft(draft, force_stage),
+                PageWriteInput::Ordinary(draft) | PageWriteInput::WithSources(draft, _) => {
+                    self.execute_draft(draft, force_stage)
+                }
                 PageWriteInput::Inverse(_) => Err(WikiError::new(
                     ErrorCode::RecoveryRequired,
                     "normalized Page inverse lost its catalog authority",
@@ -561,6 +579,11 @@ impl OfflineApp {
         let limits = RefreshProjectionLimits::default();
         let projected = match input {
             PageWriteInput::Ordinary(draft) => project_pages(&self.fs, &reader, draft, &limits)?,
+            PageWriteInput::WithSources(draft, sources) => {
+                crate::catalog::write_projection::project_pages_with_sources(
+                    &self.fs, &reader, draft, sources, &limits,
+                )?
+            }
             PageWriteInput::Inverse(inverse) => {
                 project_page_inverse(&self.fs, &reader, inverse, &limits)?
             }
@@ -1366,13 +1389,20 @@ impl OfflineApp {
         if authority.is_some() {
             use crate::catalog::source_refresh::IndexedRefreshSession;
             if self.options.dry_run {
-                IndexedRefreshSession::preview_legacy_page(&catalog, &change)?;
+                if crate::catalog::graph_projection::candidate(&manifest) {
+                    IndexedRefreshSession::preview_graph(&catalog, &change)?;
+                } else {
+                    IndexedRefreshSession::preview_legacy_page(&catalog, &change)?;
+                }
                 outcome.status = Some(ChangeStatus::Prepared);
             } else {
                 let writer = self.writer()?;
-                let mut session =
+                let mut session = if crate::catalog::graph_projection::candidate(&manifest) {
+                    IndexedRefreshSession::adopt_graph(&catalog, &writer, &change)
+                } else {
                     IndexedRefreshSession::adopt_legacy_page(&catalog, &writer, &change)
-                        .map_err(|error| retained_error(error, &change))?;
+                }
+                .map_err(|error| retained_error(error, &change))?;
                 let report = engine
                     .apply_indexed_refresh(&writer, &mut session)
                     .map_err(|error| retained_error(error, &change))?;
@@ -1469,9 +1499,34 @@ impl OfflineApp {
         }
         self.execute_draft(engine.inverse_plan(&i.prepared)?.draft, true)
     }
-    fn pending(&self, engine: &ChangeEngine) -> Result<Vec<RecordId>> {
+    fn pending(
+        &self,
+        engine: &ChangeEngine,
+        authority: Option<&crate::changes::operation_authority::Authority>,
+    ) -> Result<Vec<RecordId>> {
         let mut pending = Vec::new();
         for id in engine.change_ids()? {
+            if let Some(authority) = authority {
+                let metadata = engine.inspect_metadata(&id)?;
+                if engine
+                    .indexed_replay_proof(&metadata.manifest, &metadata.prepared, Some(authority))?
+                    .is_some_and(|proof| proof.version == 5)
+                {
+                    // Classification is metadata only, not payload integrity
+                    // or apply authority. recover_indexed performs bounded
+                    // staged verification or exact active replay before writes.
+                    if matches!(
+                        metadata.status,
+                        ChangeStatus::Applying
+                            | ChangeStatus::FilesApplied
+                            | ChangeStatus::Indexed
+                            | ChangeStatus::Conflict
+                    ) {
+                        pending.push(id);
+                    }
+                    continue;
+                }
+            }
             let i = engine.inspect_history(&id)?;
             if matches!(
                 i.status,
@@ -1491,7 +1546,7 @@ impl OfflineApp {
         let engine = self.engine()?;
         let catalog = self.catalog();
         let authority = catalog.operation_state()?;
-        let mut pending = self.pending(&engine)?;
+        let mut pending = self.pending(&engine, authority.as_ref())?;
         if let Some(active) = authority.as_ref().and_then(|state| state.active())
             && !pending.contains(&active.change.change_id)
         {
@@ -1620,7 +1675,37 @@ pub fn init_with_existing(
     existing: bool,
     options: OperationOptions,
 ) -> Result<InitOutcome> {
+    init_with_title_intent(path, Some(title), title, existing, options)
+}
+
+/// Inspect only the exact, empty bootstrap published by an interrupted init.
+pub(crate) fn init_bootstrap_identity(
+    path: &std::path::Path,
+    title: Option<&str>,
+) -> Result<Option<(RecordId, String)>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let root = crate::vault::VaultRoot::for_initialization(path)?;
+    let Some(bytes) = crate::storage::source_layout::resume_bootstrap_marker(&root, title)? else {
+        return Ok(None);
+    };
+    let note = crate::records::parse_note(&bytes);
+    let record = note
+        .canonical
+        .ok_or_else(|| usage("bootstrap marker is invalid"))?;
+    Ok(Some((record.id().clone(), record.title().to_owned())))
+}
+
+pub(crate) fn init_with_title_intent(
+    path: &std::path::Path,
+    explicit_title: Option<&str>,
+    fallback_title: &str,
+    existing: bool,
+    options: OperationOptions,
+) -> Result<InitOutcome> {
     use crate::vault::VaultRoot;
+    let title = explicit_title.unwrap_or(fallback_title);
     if options.lock_timeout_ms > 30_000 {
         return Err(WikiError::new(
             ErrorCode::ConfigInvalid,
@@ -1674,6 +1759,34 @@ pub fn init_with_existing(
     } else {
         VaultRoot::for_initialization(path)?.path().to_path_buf()
     };
+    let bootstrap = if exists && existing {
+        crate::storage::source_layout::resume_bootstrap_marker(
+            &VaultRoot::for_initialization(&resolved)?,
+            explicit_title,
+        )?
+    } else {
+        None
+    };
+    if exists
+        && existing
+        && let Some(id) = crate::storage::source_layout::completed_bootstrap_identity(
+            &VaultRoot::for_initialization(&resolved)?,
+            explicit_title,
+        )?
+    {
+        if !options.dry_run {
+            super::init_recovery::verify_init_durability(&resolved)?;
+        }
+        return Ok(InitOutcome {
+            id,
+            path: resolved
+                .to_str()
+                .ok_or_else(|| usage("vault path is not UTF-8"))?
+                .to_owned(),
+            created: false,
+            planned_directories: Vec::new(),
+        });
+    }
     let directories = vec![
         "pages",
         "knowledge/entities",
@@ -1763,11 +1876,22 @@ pub fn init_with_existing(
         }
         Ok(())
     };
-    check_absent(&reserved)?;
-    if exists {
+    if bootstrap.is_some() {
+        check_absent(&reserved[..reserved.len() - 1])?;
+    } else {
+        check_absent(&reserved)?;
+    }
+    if exists && bootstrap.is_none() {
         VaultRoot::for_initialization(&resolved)?.validate_portable_paths(&planned)?;
     }
-    let id = RecordId::generate(RecordKind::Vault)?;
+    let id = match &bootstrap {
+        Some(bytes) => crate::records::parse_note(bytes)
+            .canonical
+            .ok_or_else(|| usage("bootstrap marker is invalid"))?
+            .id()
+            .clone(),
+        None => RecordId::generate(RecordKind::Vault)?,
+    };
     if options.dry_run {
         return Ok(InitOutcome {
             id,
@@ -1799,10 +1923,11 @@ pub fn init_with_existing(
     super::init_recovery::initialize(
         &resolved,
         &id,
-        marker.as_bytes(),
+        bootstrap.as_deref().unwrap_or(marker.as_bytes()),
         exists,
         &directories,
         options.lock_timeout_ms,
+        bootstrap.is_some(),
     )?;
     Ok(InitOutcome {
         id,

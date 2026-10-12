@@ -142,6 +142,15 @@ fn present_provider(provider: &Value, output: &mut impl Write) -> io::Result<()>
                     )
                 )?;
             }
+            if role == "generation" {
+                writeln!(
+                    output,
+                    "  Reasoning effort: {}",
+                    service["reasoning_effort"]
+                        .as_str()
+                        .unwrap_or("Provider default")
+                )?;
+            }
             if let Some(limit) = service["effective_output_token_limit"].as_u64() {
                 writeln!(output, "  Maximum output tokens: {limit}")?;
             }

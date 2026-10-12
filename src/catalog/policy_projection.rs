@@ -24,6 +24,13 @@ fn corrupt(message: &str) -> WikiError {
     WikiError::new(ErrorCode::IndexCorrupt, message)
 }
 
+#[derive(Clone, Copy)]
+enum PolicyExclusions<'a> {
+    Ordinary,
+    PageMove,
+    Graph(&'a super::graph_projection::GraphReplacementScope),
+}
+
 /// `before` contains the authenticated prior notes for replaced owners; absent
 /// owners have no entry. The caller validates identity/path/write authority.
 /// Neither this helper nor its public row delta grants canonical write access.
@@ -33,11 +40,37 @@ pub(super) fn project_policy(
     overlay: &BTreeMap<VaultRelativePath, ParsedNote>,
     access: &mut dyn PolicyInputAccess,
 ) -> Result<PolicyDelta> {
-    project_policy_inner(reader, before, overlay, &BTreeSet::new(), access, false, 16)
+    project_policy_inner(
+        reader,
+        before,
+        overlay,
+        &BTreeSet::new(),
+        access,
+        PolicyExclusions::Ordinary,
+        16,
+    )
 }
 
-/// Sixteen existing Sources can each replace their Source note and create one
-/// Revision note. The enclosing batch still owns one byte/row/deadline meter.
+/// Only the typed graph admission may replace this larger exact owner set.
+pub(super) fn project_policy_for_graph(
+    reader: &QuerySnapshot,
+    before: &BTreeMap<VaultRelativePath, ParsedNote>,
+    overlay: &BTreeMap<VaultRelativePath, ParsedNote>,
+    scope: &super::graph_projection::GraphReplacementScope,
+    access: &mut dyn PolicyInputAccess,
+) -> Result<PolicyDelta> {
+    // Only the separate typed graph projector admits these owners.
+    project_policy_inner(
+        reader,
+        before,
+        overlay,
+        &BTreeSet::new(),
+        access,
+        PolicyExclusions::Graph(scope),
+        super::graph_projection::MAX_GRAPH_WRITES,
+    )
+}
+
 pub(super) fn project_policy_for_refresh_batch(
     reader: &QuerySnapshot,
     before: &BTreeMap<VaultRelativePath, ParsedNote>,
@@ -56,7 +89,15 @@ pub(super) fn project_policy_for_refresh_batch(
             "refresh batch policy overlay contains an unrelated note kind",
         ));
     }
-    project_policy_inner(reader, before, overlay, &BTreeSet::new(), access, false, 32)
+    project_policy_inner(
+        reader,
+        before,
+        overlay,
+        &BTreeSet::new(),
+        access,
+        PolicyExclusions::Ordinary,
+        32,
+    )
 }
 pub(super) fn project_policy_for_move(
     reader: &QuerySnapshot,
@@ -74,7 +115,7 @@ pub(super) fn project_policy_for_move(
         overlay,
         removed,
         access,
-        true,
+        PolicyExclusions::PageMove,
         super::normalized_delta::MAX_ROWS,
     )
 }
@@ -85,7 +126,15 @@ pub(super) fn project_policy_for_external_pages(
     removed: &BTreeSet<VaultRelativePath>,
     access: &mut dyn PolicyInputAccess,
 ) -> Result<PolicyDelta> {
-    project_policy_inner(reader, before, overlay, removed, access, true, 16)
+    project_policy_inner(
+        reader,
+        before,
+        overlay,
+        removed,
+        access,
+        PolicyExclusions::PageMove,
+        16,
+    )
 }
 fn project_policy_inner(
     reader: &QuerySnapshot,
@@ -93,7 +142,7 @@ fn project_policy_inner(
     overlay: &BTreeMap<VaultRelativePath, ParsedNote>,
     removed: &BTreeSet<VaultRelativePath>,
     access: &mut dyn PolicyInputAccess,
-    page_move: bool,
+    exclusions: PolicyExclusions<'_>,
     ceiling: usize,
 ) -> Result<PolicyDelta> {
     reader.require_policy_layout()?;
@@ -113,6 +162,9 @@ fn project_policy_inner(
         ));
     }
     let paths: BTreeSet<_> = overlay.keys().chain(removed.iter()).cloned().collect();
+    if let PolicyExclusions::Graph(scope) = exclusions {
+        scope.require(&paths)?;
+    }
     let mut changed = BTreeSet::new();
     for (path, note) in before.iter().chain(overlay) {
         access.work(PolicyWork { steps: 1, bytes: 0 })?;
@@ -186,7 +238,7 @@ fn project_policy_inner(
                     "policy input certificate allowance exhausted",
                 ));
             }
-            load_certificate(reader, &need, &paths, &mut notes, access, page_move)?;
+            load_certificate(reader, &need, &paths, &mut notes, access, exclusions)?;
             // Certify only after the complete ordered SQL result and all named
             // witnesses were admitted. An empty result is explicit evidence.
             certificates.insert(need);
@@ -201,12 +253,15 @@ fn load_certificate(
     replaced: &BTreeSet<VaultRelativePath>,
     notes: &mut BTreeMap<VaultRelativePath, ParsedNote>,
     access: &mut dyn PolicyInputAccess,
-    page_move: bool,
+    exclusions: PolicyExclusions<'_>,
 ) -> Result<()> {
-    let members = if page_move {
-        reader.policy_members_for_page_move(key, replaced)?
-    } else {
-        reader.policy_members(key, replaced)?
+    let members = match exclusions {
+        PolicyExclusions::Ordinary => reader.policy_members(key, replaced)?,
+        PolicyExclusions::PageMove => reader.policy_members_for_page_move(key, replaced)?,
+        PolicyExclusions::Graph(scope) => {
+            scope.require(replaced)?;
+            reader.policy_members_for_graph(key, replaced)?
+        }
     };
     let mut expected = BTreeMap::new();
     for (path, hash) in members {

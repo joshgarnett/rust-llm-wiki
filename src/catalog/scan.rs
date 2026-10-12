@@ -527,6 +527,9 @@ pub(crate) fn input_notes(
         || {
             let mut notes = BTreeMap::new();
             let mut seen = BTreeSet::new();
+            // This closed input is authenticated by the scan/proof owner. Only
+            // the vault format reserves this namespace; note frontmatter cannot.
+            let layout = crate::storage::layout::input_layout_kind(input);
             for document in &input.documents {
                 if !seen.insert(document.path.clone()) {
                     return Err(WikiError::invalid("duplicate canonical scan path"));
@@ -537,7 +540,9 @@ pub(crate) fn input_notes(
                         "canonical scan hash mismatch",
                     ));
                 }
-                if canonical_path(&document.path) {
+                if canonical_path(&document.path)
+                    && !crate::storage::layout::presentation_path_excluded(layout, &document.path)
+                {
                     notes.insert(document.path.clone(), parse_note(&document.bytes));
                 }
             }
@@ -546,7 +551,9 @@ pub(crate) fn input_notes(
                 if !seen.insert(target.path.clone()) {
                     return Err(WikiError::invalid("duplicate proposed path"));
                 }
-                if canonical_path(&target.path) {
+                if canonical_path(&target.path)
+                    && !crate::storage::layout::presentation_path_excluded(layout, &target.path)
+                {
                     match &target.bytes {
                         Some(bytes) => {
                             notes.insert(target.path.clone(), parse_note(bytes));

@@ -1201,3 +1201,78 @@ fn duplicate_patches_missing_profile_and_invalid_existing_bytes_refuse_safely() 
         .is_err()
     );
 }
+
+#[test]
+fn effort_edits_preserve_roles_require_consent_and_distinguish_remove_from_none() {
+    let temp = tempfile::tempdir().unwrap();
+    let wiki = wiki(temp.path(), "reasoning");
+    let bytes = fixture(&wiki, true, true);
+    let before = parse(&bytes);
+    let mut patch = ProviderRolePatch::new(ProviderRole::Generation);
+    patch.reasoning_effort = Some(Some(ReasoningEffort::None));
+    let unreviewed = plan_provider_edit(
+        Some(&bytes),
+        &wiki,
+        Some("manual"),
+        &[patch.clone()],
+        ProviderGrantDecision::Preserve,
+    )
+    .unwrap();
+    assert!(!unreviewed.consent_satisfied);
+    let plan = plan_provider_edit(
+        Some(&bytes),
+        &wiki,
+        Some("manual"),
+        &[patch.clone()],
+        ProviderGrantDecision::ReviewedAllRoles,
+    )
+    .unwrap();
+    let after = parse(plan.proposed_bytes());
+    assert_eq!(
+        selected_service(&after, plan.profile(), ProviderRole::Embedding),
+        selected_service(&before, "manual", ProviderRole::Embedding)
+    );
+    let generated = selected_service(&after, plan.profile(), ProviderRole::Generation);
+    assert_eq!(generated["reasoning_effort"].as_str(), Some("none"));
+    assert_eq!(
+        generated["auth"],
+        before["services"]["manual-generate"]["auth"]
+    );
+    assert_eq!(generated["response_mode"].as_str(), Some("json-schema"));
+    let repeat = plan_provider_edit(
+        Some(plan.proposed_bytes()),
+        &wiki,
+        Some(plan.profile()),
+        &[patch.clone()],
+        ProviderGrantDecision::Preserve,
+    )
+    .unwrap();
+    assert_eq!(repeat.proposed_bytes(), plan.proposed_bytes());
+    assert!(repeat.consent_satisfied);
+    patch.reasoning_effort = Some(None);
+    let removed = plan_provider_edit(
+        Some(plan.proposed_bytes()),
+        &wiki,
+        Some(plan.profile()),
+        &[patch],
+        ProviderGrantDecision::ReviewedAllRoles,
+    )
+    .unwrap();
+    let removed_doc = parse(removed.proposed_bytes());
+    assert!(
+        !selected_service(&removed_doc, removed.profile(), ProviderRole::Generation)
+            .contains_key("reasoning_effort")
+    );
+    let mut wrong_role = ProviderRolePatch::new(ProviderRole::Embedding);
+    wrong_role.reasoning_effort = Some(None);
+    assert!(
+        plan_provider_edit(
+            Some(&bytes),
+            &wiki,
+            Some("manual"),
+            &[wrong_role],
+            ProviderGrantDecision::ReviewedAllRoles
+        )
+        .is_err()
+    );
+}

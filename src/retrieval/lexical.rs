@@ -353,7 +353,11 @@ fn search_inner_with_discovery(
             } else if !fts {
                 format!(
                     "({}) OR ({})",
-                    filters::normal_policy(&plan.filters),
+                    if reason == RetrievalReason::ExactId {
+                        filters::normal_policy_for_exact_id(&plan.filters)
+                    } else {
+                        filters::normal_policy(&plan.filters)
+                    },
                     filters::identity_policy()
                 )
             } else {
@@ -552,6 +556,7 @@ fn search_inner_with_discovery(
             identity_eligibility: record.as_ref().and_then(|row| row.identity_eligibility),
             excerpt,
             secondary_excerpts: Vec::new(),
+            declared_source_refs: declared_source_refs(document),
             reasons,
             rank_contributions: candidate.ranks.clone(),
             source_id: document.source_id.clone(),
@@ -713,7 +718,11 @@ fn normalized_candidate_query(
     } else if !fts {
         format!(
             "({}) OR ({identity_policy})",
-            filters::catalog_normal_policy(&plan.filters, true)
+            if leg == 0 {
+                filters::catalog_normal_policy_for_exact_id(&plan.filters, true)
+            } else {
+                filters::catalog_normal_policy(&plan.filters, true)
+            }
         )
     } else {
         filters::catalog_normal_policy(&plan.filters, true)
@@ -1484,6 +1493,19 @@ fn body_offset(document: &DocumentRow) -> usize {
     }
 }
 
+/// A Page declaration can relate two displayed snippets, but it cannot turn
+/// uncited discovery into verified source evidence or establish prose support.
+pub(crate) fn declared_source_refs(document: &DocumentRow) -> Vec<CitationRef> {
+    if document.kind != Some(RecordKind::Page) {
+        return Vec::new();
+    }
+    crate::app::migration_source_refs(document.raw_text.as_bytes())
+        .ok()
+        .flatten()
+        .map(|refs| refs.citations().to_vec())
+        .unwrap_or_default()
+}
+
 /// Return false before changing order when the complete preference pass cannot
 /// fit its body envelope. Catalog deadline errors retain their existing failure.
 fn prefer_complete_body_witnesses(
@@ -1896,6 +1918,37 @@ mod indexed_source_tests {
             params![document.title,document.headings,document.body,reader.connection.last_insert_rowid()],
         ).unwrap();
         document
+    }
+
+    #[test]
+    fn page_declarations_require_an_owned_block_and_preserve_exact_references() {
+        let reader = reader();
+        let mut page = source(&reader, "page-declarations", "Harbour summary");
+        page.kind = Some(RecordKind::Page);
+        let reference = CitationRef::Source(SourceSpanRef {
+            source_id: RecordId::new("Source.Declared").unwrap(),
+            source_revision: RecordId::new("Revision.Declared").unwrap(),
+            span: ByteSpan::new(0, 12).unwrap(),
+            quote_hash: Blake3Hash::digest("Exact quote."),
+        });
+        let wire = serde_json::to_string(
+            &serde_json::json!({"schema_version":"1","citations":[reference]}),
+        )
+        .unwrap();
+        let block = format!(
+            "<!-- lwiki:source-citations:v1 begin -->\n\nSources\n\n<!--\n{wire}\n-->\n\n<!-- lwiki:source-citations:v1 end -->\n"
+        );
+        page.raw_text = block.clone();
+        assert_eq!(declared_source_refs(&page), vec![reference]);
+        page.raw_text = format!("```markdown\n{block}\n```\n");
+        assert!(declared_source_refs(&page).is_empty());
+        page.raw_text = format!("<div>\n{block}\n</div>\n");
+        assert!(declared_source_refs(&page).is_empty());
+        page.raw_text = format!("Ordinary unowned citation JSON:\n{wire}\n");
+        assert!(declared_source_refs(&page).is_empty());
+        page.raw_text = block;
+        page.kind = Some(RecordKind::Source);
+        assert!(declared_source_refs(&page).is_empty());
     }
 
     fn publish_normalized_sources(

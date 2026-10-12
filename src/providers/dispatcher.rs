@@ -450,13 +450,13 @@ impl Dispatcher {
                 if let (Some(budget), Some(slot)) = (invocation, invocation_slot)
                     && let Err(error) = budget.bind(slot, &attempt) {
                         budget.block();
-                        let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                        let _ = release_before_transport(ledger, &attempt, &options.cancel, NotSentReason::TransportNotEntered);
                         return Err(failure(error, Some(attempt)));
                     }
                 let permit = match ledger.dispatch_intent(reservation) {
                     Ok(p) => p,
                     Err(e) => {
-                        let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                        let _ = release_before_transport(ledger, &attempt, &options.cancel, NotSentReason::TransportNotEntered);
                         return Err(failure(e, Some(attempt)));
                     }
                 };
@@ -475,29 +475,19 @@ impl Dispatcher {
                 let lease = match lease_result {
                     Ok(value) => value,
                     Err(e) => {
-                        let _ = ledger.release_not_sent(
-                            &attempt,
-                            NotSentObservation {
-                                reason: NotSentReason::CredentialsUnavailable,
-                            },
-                        );
+                        let _ = release_before_transport(ledger, &attempt, &options.cancel, if e.code == ErrorCode::Cancelled { NotSentReason::CancelledBeforeSend } else { NotSentReason::CredentialsUnavailable });
                         return Err(failure(e, Some(attempt)));
                     }
                 };
                 if let Err(e) = request_headers_bound(service, &lease) {
-                    let _ = ledger.release_not_sent(
-                        &attempt,
-                        NotSentObservation {
-                            reason: NotSentReason::TransportNotEntered,
-                        },
-                    );
+                    let _ = release_before_transport(ledger, &attempt, &options.cancel, NotSentReason::TransportNotEntered);
                     return Err(failure(e, Some(attempt)));
                 }
                 let epoch = lease.epoch();
                 let redactors = match redactors(service, &lease) {
                     Ok(redactors) => redactors,
                     Err(error) => {
-                        let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                        let _ = release_before_transport(ledger, &attempt, &options.cancel, NotSentReason::TransportNotEntered);
                         return Err(failure(error, Some(attempt)));
                     }
                 };
@@ -517,22 +507,17 @@ impl Dispatcher {
                         Ok(())
                     }
                 }) {
-                    let _ = ledger.release_not_sent(
-                        &attempt,
-                        NotSentObservation {
-                            reason: NotSentReason::TransportNotEntered,
-                        },
-                    );
+                    let _ = release_before_transport(ledger, &attempt, &options.cancel, NotSentReason::TransportNotEntered);
                     return Err(failure(e, Some(attempt)));
                 }
                 if let Err(error) = policy(&options, Some(now), deadline) {
-                    let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                    let _ = release_before_transport(ledger, &attempt, &options.cancel, NotSentReason::TransportNotEntered);
                     return Err(failure(error, Some(attempt)));
                 }
                 let mut authorization = match ledger.begin_send(permit) {
                     Ok(value) => value,
                     Err(e) => {
-                        let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                        let _ = release_before_transport(ledger, &attempt, &options.cancel, NotSentReason::TransportNotEntered);
                         return Err(failure(e, Some(attempt)));
                     }
                 };
@@ -541,16 +526,11 @@ impl Dispatcher {
                     .broker
                     .validate_lease(service, &fs, &lease, &context)
                 {
-                    let _ = ledger.release_not_sent(
-                        &attempt,
-                        NotSentObservation {
-                            reason: NotSentReason::TransportNotEntered,
-                        },
-                    );
+                    let _ = release_before_transport(ledger, &attempt, &options.cancel, NotSentReason::TransportNotEntered);
                     return Err(failure(e, Some(attempt)));
                 }
                 if let Err(error)=authorization.check_before_entry() {
-                    let _=ledger.release_not_sent(&attempt,NotSentObservation { reason:NotSentReason::TransportNotEntered });
+                    let _=release_before_transport(ledger, &attempt, &options.cancel, NotSentReason::TransportNotEntered);
                     return Err(failure(error,Some(attempt)));
                 }
                 // The shared deadline may be tighter than this Run's deadline;
@@ -559,7 +539,7 @@ impl Dispatcher {
                     if let Some(budget) = invocation { budget.check_automatic_time(bound.timeout_ms)?; }
                     jobs::budgets::quote_bound(&bound, &inspection.effective_limits, current.utc_ms, deadline).map(|_| ())
                 }) {
-                    let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                    let _ = release_before_transport(ledger, &attempt, &options.cancel, NotSentReason::TransportNotEntered);
                     return Err(failure(error, Some(attempt)));
                 }
                 let connect_timeout_ms =
@@ -872,7 +852,27 @@ impl Dispatcher {
             }
         }
         .await;
-        result.map_err(|out| retained.finish(out))
+        result.map_err(|mut out| {
+            if fs.root().path() == self.fs.root().path()
+                && (out.error.code == ErrorCode::Cancelled || options.cancel.is_cancelled())
+            {
+                // This also covers cancellation before any reservation and after
+                // a machine pause. Preserve every outstanding/paid attempt.
+                match stop_cancelled_dispatch(ledger) {
+                    Ok(()) => {
+                        out.error = WikiError::new(ErrorCode::Cancelled, "dispatch cancelled");
+                    }
+                    Err(error) => {
+                        out.error = redacted(error);
+                        out.error.details = serde_json::json!({
+                            "cancellation_recording_failed": true,
+                            "cause": out.error.details,
+                        });
+                    }
+                }
+            }
+            retained.finish(out)
+        })
     }
 }
 #[derive(Clone, Copy)]
@@ -1623,6 +1623,36 @@ fn pause_running(ledger: &JobLedger, reason: StopReason) -> Result<()> {
         } else {
             ledger.pause(reason)?;
         }
+    }
+    Ok(())
+}
+
+fn release_before_transport(
+    ledger: &JobLedger,
+    attempt: &AttemptRef,
+    cancel: &CancellationToken,
+    reason: NotSentReason,
+) -> Result<EventRef> {
+    // The release itself must preserve observed cancellation. A crash before
+    // the final Run stop must not turn it into automatically replaceable work.
+    ledger.release_not_sent(
+        attempt,
+        NotSentObservation {
+            reason: if cancel.is_cancelled() {
+                NotSentReason::CancelledBeforeSend
+            } else {
+                reason
+            },
+        },
+    )
+}
+
+fn stop_cancelled_dispatch(ledger: &JobLedger) -> Result<()> {
+    if matches!(
+        ledger.inspect_accounting_verified()?.state,
+        RunState::Planned | RunState::Running | RunState::Paused
+    ) {
+        ledger.stop()?;
     }
     Ok(())
 }

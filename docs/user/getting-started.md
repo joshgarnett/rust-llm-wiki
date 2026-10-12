@@ -70,9 +70,9 @@ is missing, ask the agent to search for that detail and read the relevant notes.
 Once the answer is useful, ask for a wiki page:
 
 > Save this as a draft page in my wiki. Keep the citations and the unanswered
-> questions so I can review it.
+> questions so I can review it. Tell me the saved file path.
 
-Open the page in your editor and review it. You can keep editing your own notes
+Open the reported file in your editor and review it. You can keep editing your own notes
 as usual. [Capture their updated versions](everyday-use.md#capture-and-refresh-notes)
 when you want the agent to use those changes.
 
@@ -90,13 +90,11 @@ chosen files and prints their source IDs and citation status. It searches folder
 recursively. Repeat the same command after editing your notes: it refreshes
 changed files, adds new ones and reuses unchanged copies.
 
-Context prints passages and citations for your agent to use in its answer.
-With automatic search enabled, capture prepares eligible changed text and an
-ordinary lookup can prepare more within finite limits. Preparation may remain
-incomplete. If search by meaning is unavailable, lookup uses local search and
-explains the fallback. Check warnings if
-important details are missing. Add `--offline` to both commands to block provider
-requests.
+Context prints passages and citations rather than an answer. Read them yourself
+or give them to your agent. If search by meaning is enabled, these commands can
+use your approved provider; otherwise they use local search. Read any warnings,
+and search for a specific phrase or read the saved note if an important detail
+is missing. Add `--offline` to both commands to prevent provider requests.
 
 Read a saved note directly using its returned source ID:
 

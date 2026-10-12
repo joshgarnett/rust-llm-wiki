@@ -1,6 +1,8 @@
 //! Library operations shared by CLI and agent adapters.
 pub mod extraction;
 mod init_recovery;
+#[cfg(test)]
+pub(crate) use init_recovery::with_checkpoint as with_init_checkpoint;
 pub mod offline;
 pub mod resolution;
 pub mod types;
@@ -31,6 +33,7 @@ mod refresh_fixture_export;
 pub(crate) mod refresh_path_profile;
 
 pub(crate) mod page_citations;
+pub(crate) use page_citations::{migrate_source_citation_block, migration_source_refs};
 mod page_rename;
 mod pages;
 pub use page_citations::PageSourceRefs;
@@ -80,3 +83,6 @@ mod init_tests;
 
 pub mod literal;
 mod path_refresh;
+
+#[cfg(test)]
+mod normalized_graph_write_tests;

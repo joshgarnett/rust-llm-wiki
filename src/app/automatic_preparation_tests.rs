@@ -531,6 +531,31 @@ impl JobClock for ControlledClock {
     }
 }
 
+fn assert_current_amber_readable(fixture: &Fixture, normalized: bool, expected: &str) {
+    use crate::catalog::{
+        query_types::{QueryCatalog, QueryReadLimits},
+        transient_read::CurrentQueryAttempt,
+    };
+    let path = VaultRelativePath::new("knowledge/pages/amber.md").unwrap();
+    let document = if normalized {
+        let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
+        let CurrentQueryAttempt::Ready(reader) = catalog
+            .current_query_snapshot(QueryReadLimits::default())
+            .unwrap()
+        else {
+            panic!("tiny normalized fixture must support ordinary current observation");
+        };
+        let document = reader.document(&path).unwrap().unwrap();
+        reader.final_recheck(&catalog).unwrap();
+        document
+    } else {
+        fixture.reader().document(&path).unwrap().unwrap()
+    };
+    assert!(document.body.contains(expected), "{}", document.body);
+    let bytes = std::fs::read(fixture.fs.root().resolve(&path).unwrap()).unwrap();
+    assert_eq!(document.hash, Blake3Hash::digest(bytes));
+}
+
 #[test]
 fn response_after_admission_expiry_stays_received_and_recovers_without_http() {
     for normalized in [false, true] {
@@ -678,73 +703,82 @@ impl crate::vault::DurableIo for ExpireOnReceiptIo {
 
 #[test]
 fn expiry_during_receipt_apply_finishes_exact_settlement_and_confirmation() {
-    let mut fixture = Fixture::new();
-    fixture.page(
-        "amber",
-        "Amber evidence survives receipt completion after admission stops.",
-    );
-    let clock = Arc::new(ControlledClock::new());
-    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    fixture.fs = crate::vault::VaultFs::with_io(
-        fixture.fs.root().clone(),
-        Arc::new(ExpireOnReceiptIo {
-            clock: clock.clone(),
-            armed: armed.clone(),
-            fired: fired.clone(),
-        }),
-    );
-    fixture.app =
-        OfflineApp::new(fixture.fs.clone(), crate::app::OperationOptions::default()).unwrap();
-    let responses = Arc::new(Responses {
-        hook: Some(Box::new(move |_| armed.store(true, Ordering::SeqCst))),
-        ..Responses::new()
-    });
-    let dispatch = dispatcher(&fixture.fs, responses.clone());
-    let mut raw = runtime(&fixture.service, &dispatch);
-    raw.job_options.clock = clock;
-    let settings = EmbeddingSettings::default();
-    let scoped = raw
-        .for_automatic_operation(PreparationTrigger::Setup, &settings)
-        .unwrap();
-    let outcome = fixture.app.prepare_automatic_embeddings(&settings, &scoped);
-    assert!(
-        fired.load(Ordering::SeqCst),
-        "fault did not observe canonical receipt replacement"
-    );
-    assert_eq!(
-        outcome.state,
-        AutomaticPreparationState::Partial,
-        "{outcome:?}"
-    );
-    assert_eq!(outcome.observations.generated_inputs, 1);
-    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
-    let run = outcome
-        .observations
-        .touched_run_ids
-        .iter()
-        .next()
-        .unwrap()
-        .clone();
-    let ledger = fixture.app.embedding_ledger_for(&scoped, run).unwrap();
-    let inspected = ledger.inspect_accounting_verified().unwrap();
-    assert_eq!(inspected.attempts[0].phase, AttemptPhase::Settled);
-    assert!(
-        inspected
-            .tasks
-            .values()
-            .all(|task| task.state == TaskState::Completed)
-    );
-    let store = VectorStore::open(&fixture.fs, None).unwrap();
-    assert!(
-        inspected.attempts[0]
-            .cache_outputs
+    for normalized in [false, true] {
+        let mut fixture = Fixture::new();
+        fixture.page(
+            "amber",
+            "Amber evidence survives receipt completion after admission stops.",
+        );
+        if normalized {
+            fixture.app.index_rebuild_normalized().unwrap();
+        }
+        let clock = Arc::new(ControlledClock::new());
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        fixture.fs = crate::vault::VaultFs::with_io(
+            fixture.fs.root().clone(),
+            Arc::new(ExpireOnReceiptIo {
+                clock: clock.clone(),
+                armed: armed.clone(),
+                fired: fired.clone(),
+            }),
+        );
+        fixture.app =
+            OfflineApp::new(fixture.fs.clone(), crate::app::OperationOptions::default()).unwrap();
+        let responses = Arc::new(Responses {
+            hook: Some(Box::new(move |_| armed.store(true, Ordering::SeqCst))),
+            ..Responses::new()
+        });
+        let dispatch = dispatcher(&fixture.fs, responses.clone());
+        let mut raw = runtime(&fixture.service, &dispatch);
+        raw.job_options.clock = clock;
+        let settings = EmbeddingSettings::default();
+        let scoped = raw
+            .for_automatic_operation(PreparationTrigger::Setup, &settings)
+            .unwrap();
+        let outcome = fixture.app.prepare_automatic_embeddings(&settings, &scoped);
+        assert!(
+            fired.load(Ordering::SeqCst),
+            "fault did not observe canonical receipt replacement"
+        );
+        assert_eq!(
+            outcome.state,
+            AutomaticPreparationState::Partial,
+            "{outcome:?}"
+        );
+        assert_eq!(outcome.observations.generated_inputs, 1);
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+        let run = outcome
+            .observations
+            .touched_run_ids
             .iter()
-            .all(|reference| store.verify_ref(reference).unwrap())
-    );
-    drop(store);
-    // Existing canonical recovery classification remains clean after the entered transaction.
-    fixture.reader();
+            .next()
+            .unwrap()
+            .clone();
+        let ledger = fixture.app.embedding_ledger_for(&scoped, run).unwrap();
+        let inspected = ledger.inspect_accounting_verified().unwrap();
+        assert_eq!(inspected.attempts[0].phase, AttemptPhase::Settled);
+        assert!(
+            inspected
+                .tasks
+                .values()
+                .all(|task| task.state == TaskState::Completed)
+        );
+        let store = VectorStore::open(&fixture.fs, None).unwrap();
+        assert!(
+            inspected.attempts[0]
+                .cache_outputs
+                .iter()
+                .all(|reference| store.verify_ref(reference).unwrap())
+        );
+        drop(store);
+        // Existing canonical recovery classification remains clean after the entered transaction.
+        assert_current_amber_readable(
+            &fixture,
+            normalized,
+            "Amber evidence survives receipt completion after admission stops.",
+        );
+    }
 }
 
 #[test]
@@ -758,45 +792,69 @@ fn expiry_during_bootstrap_preserves_marker_and_never_starts_transport() {
             Ok(())
         }
     }
-    let fixture = Fixture::new();
-    fixture.page("amber", "Local evidence survives a bootstrap deadline.");
-    let clock = Arc::new(ControlledClock::new());
-    let responses = Arc::new(Responses::new());
-    let dispatch = dispatcher(&fixture.fs, responses.clone());
-    let mut raw = runtime(&fixture.service, &dispatch);
-    raw.job_options.clock = clock.clone();
-    raw.job_options.fault = Some(Arc::new(ExpireBootstrap(clock)));
-    let scoped = raw
-        .for_automatic_operation(PreparationTrigger::Setup, &EmbeddingSettings::default())
-        .unwrap();
-    let outcome = fixture
-        .app
-        .prepare_automatic_embeddings(&EmbeddingSettings::default(), &scoped);
-    assert_eq!(
-        outcome.state,
-        AutomaticPreparationState::Pending,
-        "{outcome:?}"
-    );
-    assert_eq!(outcome.observations.canonical_transactions, 1);
-    assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
-    let markers = fixture.fs.root().path().join(".wiki/state/embedding-jobs");
-    assert_eq!(std::fs::read_dir(markers).unwrap().count(), 1);
-    let run = outcome
-        .observations
-        .touched_run_ids
-        .iter()
-        .next()
-        .unwrap()
-        .clone();
-    let ledger = fixture.app.embedding_ledger_for(&scoped, run).unwrap();
-    assert!(
-        ledger
-            .inspect_accounting_verified()
+    for normalized in [false, true] {
+        let fixture = Fixture::new();
+        fixture.page("amber", "Local evidence survives a bootstrap deadline.");
+        if normalized {
+            fixture.app.index_rebuild_normalized().unwrap();
+        }
+        let clock = Arc::new(ControlledClock::new());
+        let responses = Arc::new(Responses::new());
+        let dispatch = dispatcher(&fixture.fs, responses.clone());
+        let mut raw = runtime(&fixture.service, &dispatch);
+        raw.job_options.clock = clock.clone();
+        raw.job_options.fault = Some(Arc::new(ExpireBootstrap(clock)));
+        let scoped = raw
+            .for_automatic_operation(PreparationTrigger::Setup, &EmbeddingSettings::default())
+            .unwrap();
+        let outcome = fixture
+            .app
+            .prepare_automatic_embeddings(&EmbeddingSettings::default(), &scoped);
+        assert_eq!(
+            outcome.state,
+            AutomaticPreparationState::Pending,
+            "{outcome:?}"
+        );
+        assert_eq!(outcome.observations.canonical_transactions, 1);
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+        let markers = fixture.fs.root().path().join(".wiki/state/embedding-jobs");
+        assert_eq!(std::fs::read_dir(markers).unwrap().count(), 1);
+        let run = outcome
+            .observations
+            .touched_run_ids
+            .iter()
+            .next()
             .unwrap()
-            .attempts
-            .is_empty()
-    );
-    fixture.reader();
+            .clone();
+        let ledger = fixture.app.embedding_ledger_for(&scoped, run).unwrap();
+        assert!(
+            ledger
+                .inspect_accounting_verified()
+                .unwrap()
+                .attempts
+                .is_empty()
+        );
+        assert_current_amber_readable(
+            &fixture,
+            normalized,
+            "Local evidence survives a bootstrap deadline.",
+        );
+        let next = runtime(&fixture.service, &dispatch)
+            .for_automatic_operation(PreparationTrigger::Setup, &EmbeddingSettings::default())
+            .unwrap();
+        let recovered = fixture
+            .app
+            .prepare_automatic_embeddings(&EmbeddingSettings::default(), &next);
+        assert_eq!(
+            recovered.state,
+            AutomaticPreparationState::Ready,
+            "{recovered:?}"
+        );
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+        let closed = ledger.inspect_accounting_verified().unwrap();
+        assert_eq!(closed.state, RunState::Failed);
+        assert!(closed.attempts.is_empty());
+    }
 }
 
 #[test]
@@ -872,4 +930,605 @@ fn late_retained_hold_blocks_new_corpus_and_query_admission() {
     assert_eq!(before.budget, after.budget);
     assert_eq!(before.attempts, after.attempts);
     assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn automatic_unsent_scope_closes_and_replans_with_current_limits_on_both_layouts() {
+    for normalized in [false, true] {
+        for released in [
+            None,
+            Some(NotSentReason::TransportNotEntered),
+            Some(NotSentReason::CredentialsUnavailable),
+        ] {
+            let mut fixture = Fixture::new();
+            // A query-only scope requires dimensions established by its model
+            // configuration or earlier corpus work. This fixture has no corpus
+            // dispatch, so declare the mock's fixed two-dimensional output.
+            let provider_text = std::fs::read_to_string(&fixture.config)
+                .unwrap()
+                .replace("max_batch_items=1", "dimensions=2\nmax_batch_items=1");
+            common::private_write(&fixture.config, provider_text);
+            fixture.service = crate::config::providers::ProviderConfig::load(&fixture.config)
+                .unwrap()
+                .authorize(
+                    &fixture.fs,
+                    fixture.app.vault_id(),
+                    "primary",
+                    Capability::Embed,
+                )
+                .unwrap();
+            fixture.page("amber", "Amber recovery remains useful.");
+            if normalized {
+                fixture.app.index_rebuild_normalized().unwrap();
+            }
+            let responses = Arc::new(Responses::new());
+            let dispatch = dispatcher(&fixture.fs, responses.clone());
+            let settings = EmbeddingSettings::default();
+            let spec = fixture.spec();
+            let input = spec.query("where is amber").unwrap();
+            let batches = vec![vec![input.clone()]];
+            let first = runtime(&fixture.service, &dispatch)
+                .for_automatic_operation(PreparationTrigger::Setup, &settings)
+                .unwrap();
+            let (old, tasks) = fixture
+                .app
+                .embedding_job(&spec, &batches, &[], &first, "embeddings_query", false)
+                .unwrap();
+            if let Some(reason) = released {
+                let mut bound = crate::providers::preview_embedding_request(
+                    &fixture.service,
+                    &[input],
+                    spec.dimensions,
+                    &spec.id().unwrap(),
+                )
+                .unwrap();
+                bound.timeout_ms = 1000;
+                bound.bounds_fingerprint = jobs::budgets::bound_fingerprint(&bound).unwrap();
+                let reservation = old.reserve(&tasks[0].key, bound).unwrap();
+                let attempt = old.inspect().unwrap().attempts[0].attempt.clone();
+                drop(old.dispatch_intent(reservation).unwrap());
+                old.pause(StopReason::ReconciliationRequired).unwrap();
+                old.release_not_sent(&attempt, jobs::NotSentObservation { reason })
+                    .unwrap();
+            }
+            let before = old.inspect_accounting_verified().unwrap();
+            assert!(old.can_close_unstarted_embedding(&before.spec).unwrap());
+            assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+            let mut raw = runtime(&fixture.service, &dispatch);
+            raw.limits.requests = 1;
+            let next = raw
+                .for_automatic_operation(PreparationTrigger::Setup, &settings)
+                .unwrap();
+            let (successor, next_tasks) = fixture
+                .app
+                .embedding_job(&spec, &batches, &[], &next, "embeddings_query", false)
+                .unwrap();
+            let closed = old.inspect_accounting_verified().unwrap();
+            assert_eq!(closed.state, RunState::Failed);
+            assert_eq!(closed.spec, before.spec);
+            assert_eq!(closed.effective_limits, before.effective_limits);
+            assert_eq!(
+                closed.effective_deadline_utc_ms,
+                before.effective_deadline_utc_ms
+            );
+            assert_eq!(closed.attempts, before.attempts);
+            assert_eq!(closed.budget.outstanding, before.budget.outstanding);
+            let replacement = successor.inspect_accounting_verified().unwrap();
+            assert_ne!(replacement.spec.run_id, before.spec.run_id);
+            assert_eq!(replacement.spec.tasks, before.spec.tasks);
+            assert_eq!(replacement.spec.limits.requests, 1);
+            assert!(replacement.spec.title.contains(before.spec.run_id.as_str()));
+            let generated = fixture
+                .app
+                .dispatch_embedding_task(
+                    &successor,
+                    &next_tasks[0],
+                    &spec,
+                    &[],
+                    &next,
+                    TaskMaterialization {
+                        probe: false,
+                        corpus: false,
+                    },
+                )
+                .unwrap();
+            assert_eq!(generated, 1);
+            assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                successor.inspect().unwrap().attempts[0].phase,
+                AttemptPhase::Settled
+            );
+        }
+    }
+}
+
+#[test]
+fn automatic_unsent_closure_preserves_explicit_intent_and_unresolved_attempts() {
+    for case in [
+        "user_pause",
+        "stop",
+        "reserved",
+        "dispatch_intent",
+        "send_authorized",
+    ] {
+        let fixture = Fixture::new();
+        let responses = Arc::new(Responses::new());
+        let dispatch = dispatcher(&fixture.fs, responses.clone());
+        let settings = EmbeddingSettings::default();
+        let spec = fixture.spec();
+        let input = spec.query("preserve deliberate controls").unwrap();
+        let scoped = runtime(&fixture.service, &dispatch)
+            .for_automatic_operation(PreparationTrigger::Setup, &settings)
+            .unwrap();
+        let (ledger, tasks) = fixture
+            .app
+            .embedding_job(
+                &spec,
+                &[vec![input.clone()]],
+                &[],
+                &scoped,
+                "embeddings_query",
+                false,
+            )
+            .unwrap();
+        match case {
+            "user_pause" => {
+                ledger.pause(StopReason::Budget).unwrap();
+                // Deliberate intent must remain durable even while already paused.
+                ledger
+                    .pause(StopReason::User("keep this paused".into()))
+                    .unwrap();
+            }
+            "stop" => {
+                ledger.stop().unwrap();
+            }
+            _ => {
+                let mut bound = crate::providers::preview_embedding_request(
+                    &fixture.service,
+                    &[input],
+                    spec.dimensions,
+                    &spec.id().unwrap(),
+                )
+                .unwrap();
+                bound.timeout_ms = 1000;
+                bound.bounds_fingerprint = jobs::budgets::bound_fingerprint(&bound).unwrap();
+                let reservation = ledger.reserve(&tasks[0].key, bound).unwrap();
+                if case != "reserved" {
+                    let intent = ledger.dispatch_intent(reservation).unwrap();
+                    if case == "send_authorized" {
+                        drop(ledger.begin_send(intent).unwrap());
+                        let attempt = ledger.inspect().unwrap().attempts[0].attempt.clone();
+                        ledger
+                            .release_not_sent(
+                                &attempt,
+                                jobs::NotSentObservation {
+                                    reason: NotSentReason::TransportNotEntered,
+                                },
+                            )
+                            .unwrap();
+                    }
+                }
+            }
+        }
+        let before = ledger.inspect_accounting_verified().unwrap();
+        // Reopen using independent options to prove pause/release state is durable.
+        let reopened = fixture
+            .app
+            .embedding_ledger_for(&scoped, before.spec.run_id.clone())
+            .unwrap();
+        assert!(
+            !reopened
+                .can_close_unstarted_embedding(&before.spec)
+                .unwrap(),
+            "{case}"
+        );
+        assert_eq!(
+            reopened
+                .close_unstarted_embedding(&before.spec)
+                .unwrap_err()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        let after = reopened.inspect_accounting_verified().unwrap();
+        assert_eq!(before.state, after.state, "{case}");
+        assert_eq!(before.attempts, after.attempts, "{case}");
+        assert_eq!(before.budget, after.budget, "{case}");
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn expiry_immediately_after_receipt_commit_finishes_settlement_on_both_layouts() {
+    struct ExpireBeforeAcknowledgment {
+        clock: Arc<ControlledClock>,
+        fired: Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl LedgerFault for ExpireBeforeAcknowledgment {
+        fn check(&self, point: LedgerCheckpoint) -> Result<()> {
+            // This hook is inside verified canonical receipt acknowledgment,
+            // after the canonical transaction has committed, before its event.
+            if point == LedgerCheckpoint::BeforeOutputsCommitted {
+                self.fired.store(true, Ordering::SeqCst);
+                self.clock.expire();
+            }
+            Ok(())
+        }
+    }
+    for normalized in [false, true] {
+        let fixture = Fixture::new();
+        fixture.page("amber", "Amber remains readable after the receipt commit.");
+        if normalized {
+            fixture.app.index_rebuild_normalized().unwrap();
+        }
+        let clock = Arc::new(ControlledClock::new());
+        let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let responses = Arc::new(Responses::new());
+        let dispatch = dispatcher(&fixture.fs, responses.clone());
+        let mut raw = runtime(&fixture.service, &dispatch);
+        raw.job_options.clock = clock.clone();
+        raw.job_options.fault = Some(Arc::new(ExpireBeforeAcknowledgment {
+            clock,
+            fired: fired.clone(),
+        }));
+        let settings = EmbeddingSettings::default();
+        let scoped = raw
+            .for_automatic_operation(PreparationTrigger::Setup, &settings)
+            .unwrap();
+        let outcome = fixture.app.prepare_automatic_embeddings(&settings, &scoped);
+        assert!(fired.load(Ordering::SeqCst));
+        assert_eq!(
+            outcome.state,
+            AutomaticPreparationState::Partial,
+            "{outcome:?}"
+        );
+        assert_eq!(outcome.observations.generated_inputs, 1);
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+        let run = outcome
+            .observations
+            .touched_run_ids
+            .iter()
+            .next()
+            .unwrap()
+            .clone();
+        let inspected = fixture
+            .app
+            .embedding_ledger_for(&scoped, run)
+            .unwrap()
+            .inspect_accounting_verified()
+            .unwrap();
+        assert_eq!(inspected.attempts[0].phase, AttemptPhase::Settled);
+        assert!(inspected.attempts[0].receipt.is_some());
+        assert!(
+            inspected
+                .tasks
+                .values()
+                .all(|task| task.state == TaskState::Completed)
+        );
+        let store = VectorStore::open(&fixture.fs, None).unwrap();
+        assert!(
+            inspected.attempts[0]
+                .cache_outputs
+                .iter()
+                .all(|reference| store.verify_ref(reference).unwrap())
+        );
+        drop(store);
+        assert_current_amber_readable(
+            &fixture,
+            normalized,
+            "Amber remains readable after the receipt commit.",
+        );
+    }
+}
+
+#[test]
+fn automatic_replanning_does_not_cancel_an_identical_explicit_run() {
+    let fixture = Fixture::new();
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let settings = EmbeddingSettings::default();
+    let spec = fixture.spec();
+    let batches = vec![vec![spec.query("same exact question").unwrap()]];
+    let explicit = runtime(&fixture.service, &dispatch)
+        .scoped_for_operation()
+        .unwrap();
+    let (old, _) = fixture
+        .app
+        .embedding_job(&spec, &batches, &[], &explicit, "embeddings_query", false)
+        .unwrap();
+    let before = old.inspect_accounting_verified().unwrap();
+    let auto = runtime(&fixture.service, &dispatch)
+        .for_automatic_operation(PreparationTrigger::Setup, &settings)
+        .unwrap();
+    assert!(
+        !automatic_unstarted_scope(&auto, &before, "embeddings_query", &spec.id().unwrap(), &[])
+            .unwrap()
+    );
+    let error = fixture
+        .app
+        .embedding_job(&spec, &batches, &[], &auto, "embeddings_query", false)
+        .err()
+        .expect("unmarked pending work requires explicit continuation");
+    assert_eq!(error.code, ErrorCode::RecoveryRequired);
+    let after = old.inspect_accounting_verified().unwrap();
+    assert_eq!(before, after);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn credential_and_pre_send_cancellation_stays_blocked_with_a_fresh_token() {
+    use crate::providers::credentials::{
+        CredentialBroker, CredentialOptions, HelperInvocation, HelperLimits, HelperOutput,
+        HelperRunner, NativeSecretInputs,
+    };
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+    struct NoJitter;
+    impl crate::providers::types::JitterSource for NoJitter {
+        fn sample_inclusive(&self, _: u64) -> Result<u64> {
+            Ok(0)
+        }
+    }
+
+    struct CancelHelper {
+        during_helper: bool,
+        returned: Arc<AtomicBool>,
+        calls: AtomicUsize,
+    }
+    impl HelperRunner for CancelHelper {
+        fn run(
+            &self,
+            _: &HelperInvocation,
+            _: &HelperLimits,
+            _: &dyn JobClock,
+            cancel: &CancellationToken,
+        ) -> Result<HelperOutput> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.returned.store(true, Ordering::SeqCst);
+            if self.during_helper {
+                cancel.cancel();
+            }
+            HelperOutput::new(b"fixture-key".to_vec())
+        }
+    }
+    struct CancelOnFinalCredentialClock {
+        returned: Arc<AtomicBool>,
+        after_helper: AtomicUsize,
+        cancel: CancellationToken,
+    }
+    impl JobClock for CancelOnFinalCredentialClock {
+        fn read(&self) -> Result<ClockReading> {
+            // The broker's completed/final readings follow the helper. Cancel
+            // during the final reading, after its policy check: the valid lease
+            // returns and dispatcher policy must catch cancellation before send.
+            if self.returned.load(Ordering::SeqCst)
+                && self.after_helper.fetch_add(1, Ordering::SeqCst) == 1
+            {
+                self.cancel.cancel();
+            }
+            common::TestClock.read()
+        }
+    }
+    struct FailCancellationStop {
+        returned: Arc<AtomicBool>,
+        appends: AtomicUsize,
+    }
+    impl LedgerFault for FailCancellationStop {
+        fn check(&self, point: LedgerCheckpoint) -> Result<()> {
+            // Persist the cancelled release, then fail the separate Run stop.
+            if point == LedgerCheckpoint::BeforeAppend
+                && self.returned.load(Ordering::SeqCst)
+                && self.appends.fetch_add(1, Ordering::SeqCst) == 1
+            {
+                return Err(WikiError::new(
+                    ErrorCode::Internal,
+                    "fixture cancellation stop failed",
+                ));
+            }
+            Ok(())
+        }
+    }
+    for normalized in [false, true] {
+        for mode in ["helper", "pre_send", "stop_failure"] {
+            let mut fixture = Fixture::new();
+            fixture.page(
+                "amber",
+                "Amber cancellation leaves local evidence available.",
+            );
+            let text = std::fs::read_to_string(&fixture.config).unwrap().replace(
+                "kind='static'\nkey='mock-secret'",
+                "kind='command'\ncommand=['/fixture/helper']\noutput='text'\nttl_seconds=300\nrefresh_skew_seconds=60",
+            );
+            common::private_write(&fixture.config, text);
+            fixture.service = crate::config::providers::ProviderConfig::load(&fixture.config)
+                .unwrap()
+                .authorize(
+                    &fixture.fs,
+                    fixture.app.vault_id(),
+                    "primary",
+                    Capability::Embed,
+                )
+                .unwrap();
+            if normalized {
+                fixture.app.index_rebuild_normalized().unwrap();
+            }
+            let returned = Arc::new(AtomicBool::new(false));
+            let cancel = CancellationToken::default();
+            let helper = Arc::new(CancelHelper {
+                during_helper: mode != "pre_send",
+                returned: returned.clone(),
+                calls: AtomicUsize::new(0),
+            });
+            let broker_clock = Arc::new(CancelOnFinalCredentialClock {
+                returned: returned.clone(),
+                after_helper: AtomicUsize::new(0),
+                cancel: cancel.clone(),
+            });
+            let responses = Arc::new(Responses::new());
+            let dispatch = Dispatcher::new(
+                fixture.fs.clone(),
+                DispatchOptions {
+                    broker: Arc::new(CredentialBroker::new(CredentialOptions {
+                        clock: broker_clock.clone(),
+                        inputs: Arc::new(NativeSecretInputs),
+                        runner: helper.clone(),
+                    })),
+                    transport: responses.clone(),
+                    jitter: Arc::new(NoJitter),
+                },
+            );
+            let mut raw = runtime(&fixture.service, &dispatch);
+            raw.job_options.cancel = cancel;
+            if mode == "stop_failure" {
+                raw.job_options.fault = Some(Arc::new(FailCancellationStop {
+                    returned,
+                    appends: AtomicUsize::new(0),
+                }));
+            }
+            let settings = EmbeddingSettings::default();
+            let scoped = raw
+                .for_automatic_operation(PreparationTrigger::Setup, &settings)
+                .unwrap();
+            let failed = fixture.app.prepare_automatic_embeddings(&settings, &scoped);
+            let error = failed.error.as_ref().unwrap();
+            if mode == "stop_failure" {
+                assert_eq!(error.code, ErrorCode::Internal, "{failed:?}");
+                assert!(
+                    error
+                        .details
+                        .to_string()
+                        .contains("cancellation_recording_failed"),
+                    "{failed:?}"
+                );
+            } else {
+                assert_eq!(error.code, ErrorCode::Cancelled, "{failed:?}");
+            }
+            assert_eq!(helper.calls.load(Ordering::SeqCst), 1);
+            if mode == "pre_send" {
+                assert_eq!(broker_clock.after_helper.load(Ordering::SeqCst), 2);
+            }
+            assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+            let run = failed
+                .observations
+                .touched_run_ids
+                .iter()
+                .next()
+                .unwrap()
+                .clone();
+            let fresh = runtime(&fixture.service, &dispatch)
+                .for_automatic_operation(PreparationTrigger::Setup, &settings)
+                .unwrap();
+            let ledger = fixture
+                .app
+                .embedding_ledger_for(&fresh, run.clone())
+                .unwrap();
+            let before = ledger.inspect_accounting_verified().unwrap();
+            assert_eq!(
+                before.state,
+                if mode == "stop_failure" {
+                    RunState::Running
+                } else {
+                    RunState::Stopped
+                }
+            );
+            assert_eq!(before.attempts.len(), 1);
+            assert_eq!(
+                before.attempts[0].billing,
+                BillingDisposition::ReleasedNotSent
+            );
+            assert!(before.attempts[0].spool.is_none());
+            assert!(!ledger.can_close_unstarted_embedding(&before.spec).unwrap());
+            let blocked = fixture.app.prepare_automatic_embeddings(&settings, &fresh);
+            assert_eq!(
+                blocked.state,
+                AutomaticPreparationState::Blocked,
+                "{blocked:?}"
+            );
+            assert!(blocked.observations.blocked_run_ids.contains(&run));
+            assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(helper.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(ledger.inspect_accounting_verified().unwrap(), before);
+            assert_eq!(
+                std::fs::read_dir(fixture.fs.root().path().join(".wiki/state/embedding-jobs"))
+                    .unwrap()
+                    .count(),
+                1
+            );
+            assert_current_amber_readable(
+                &fixture,
+                normalized,
+                "Amber cancellation leaves local evidence available.",
+            );
+        }
+    }
+}
+
+#[test]
+fn cancellation_before_reservation_stops_running_and_machine_paused_automatic_runs() {
+    for paused in [false, true] {
+        let fixture = Fixture::new();
+        fixture.page("amber", "Amber remains available after cancellation.");
+        let responses = Arc::new(Responses::new());
+        let dispatch = dispatcher(&fixture.fs, responses.clone());
+        let settings = EmbeddingSettings::default();
+        let spec = fixture.spec();
+        let raw = runtime(&fixture.service, &dispatch);
+        let cancel = raw.job_options.cancel.clone();
+        let scoped = raw
+            .for_automatic_operation(PreparationTrigger::Setup, &settings)
+            .unwrap();
+        let (ledger, tasks) = fixture
+            .app
+            .embedding_job(
+                &spec,
+                &[vec![spec.query("amber").unwrap()]],
+                &[],
+                &scoped,
+                "embeddings_query",
+                false,
+            )
+            .unwrap();
+        if paused {
+            ledger.pause(StopReason::Budget).unwrap();
+        }
+        let before = ledger.inspect_accounting_verified().unwrap();
+        cancel.cancel();
+        let failure = dispatch
+            .execute_with_invocation(
+                &ledger,
+                &fixture.service,
+                &tasks[0].key,
+                DispatchPurpose::Task,
+                scoped.invocation.as_ref().unwrap(),
+            )
+            .err()
+            .expect("cancelled dispatch must stop before reservation");
+        assert_eq!(failure.error.code, ErrorCode::Cancelled);
+        assert!(failure.attempt.is_none());
+        let fresh = runtime(&fixture.service, &dispatch)
+            .for_automatic_operation(PreparationTrigger::Setup, &settings)
+            .unwrap();
+        let reopened = fixture
+            .app
+            .embedding_ledger_for(&fresh, before.spec.run_id.clone())
+            .unwrap();
+        let after = reopened.inspect_accounting_verified().unwrap();
+        assert_eq!(after.state, RunState::Stopped);
+        assert_eq!(after.spec, before.spec);
+        assert_eq!(after.attempts, before.attempts);
+        assert!(after.attempts.is_empty());
+        assert_eq!(after.budget.outstanding, before.budget.outstanding);
+        let blocked = fixture.app.prepare_automatic_embeddings(&settings, &fresh);
+        assert_eq!(
+            blocked.state,
+            AutomaticPreparationState::Blocked,
+            "{blocked:?}"
+        );
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            std::fs::read_dir(fixture.fs.root().path().join(".wiki/state/embedding-jobs"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
 }

@@ -60,6 +60,7 @@
     "storage inventory",
     "storage plan",
     "storage cleanup",
+    "storage migrate",
     "changes show",
     "changes apply",
     "changes abort",
@@ -76,11 +77,11 @@
     "SKILL.md": "e98fad70060f729512e619cafb8d45a3d9564d8dc3d1d1f056059853027d280d",
     "agents/openai.yaml": "307ad222dc5d27d563d54b0a0466264fd035378ce2d103bcbf8de4ed2ea1b144",
     "references/cited-page.md": "55057dc5a73a711a85d85fb5c80bd1aec50c05140d73197bc1d7654e6c0b8f9f",
-    "references/commands.md": "4b9260dfbb23ecc48addd2e06daf78e95215843088906c3ddaf462e5ee55de73",
+    "references/commands.md": "42424ba34a4f9c6d6fbf28956ca31ddf10b88ea667bf3a70b814ce022796cce6",
     "references/examples.json": "c9e5471d1b1506317c140e37f051145d5017e6ef077e7350f771468f88eb6d89",
-    "references/workflows.md": "22ed821cf884bd8ed8ecdf0cf7cc4263037b03b20b45f09ebcc99876ba201b44"
+    "references/workflows.md": "6f5874bc42225de9613e512af81f39cf24623d324bac3ddf0193edb40aa5c84a"
   },
-  "package_checksum": "93e0da6ff7ed40c94b4f564f5ebd2c1e91a860e153754ffddc4f264efca7d8ef",
+  "package_checksum": "362ea76109f864e0d27a517cf7e644fa28ac71020da44558e0783e8682941dec",
   "schema": "lwiki.skill-manifest.v1",
   "schemas": [
     "context-original-selection",

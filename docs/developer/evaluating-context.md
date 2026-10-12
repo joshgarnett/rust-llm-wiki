@@ -4,7 +4,7 @@ The offline [context evaluator](../../scripts/context_eval.py) measures whether 
 
 The [complementary dataset plan](eval-datasets.md) adds conditional answers, multi-source technical support, missing reasoning steps, contradiction and versioned CLI documentation. It records pinned downloads, licensing, adapter requirements and which samples are development data. Downloaded samples do not count as executed or accepted evaluations.
 
-For the user workflow and copyable commands, see [selecting context with a host agent](../user/retrieval.md#select-passages-with-a-host).
+For the user workflow and copyable commands, see [selecting context with a host agent](../user/retrieval.md#find-missing-details).
 
 The [ContractNLI adapter](evaluating-contractnli.md) adds designated-document evidence tests for support, contradiction and missing information. Its exhaustive annotation coverage is separate from semantic completeness and three-way classification accuracy.
 

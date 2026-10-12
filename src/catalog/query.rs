@@ -1264,14 +1264,35 @@ impl QuerySnapshot {
         key: &super::link_facts::MatchKey,
         excluded_paths: &BTreeSet<VaultRelativePath>,
     ) -> Result<super::navigation_resolution::RegistryProbe> {
+        self.registry_probe_excluding_bounded(key, excluded_paths, 16)
+    }
+    /// The caller supplies the separately admitted graph replacement boundary.
+    /// Existing Page/Source/Job probes keep their original sixteen-owner bound.
+    pub(super) fn registry_probe_for_graph_key_excluding(
+        &self,
+        key: &super::link_facts::MatchKey,
+        excluded_paths: &BTreeSet<VaultRelativePath>,
+    ) -> Result<super::navigation_resolution::RegistryProbe> {
+        self.registry_probe_excluding_bounded(
+            key,
+            excluded_paths,
+            super::graph_projection::MAX_GRAPH_WRITES,
+        )
+    }
+    fn registry_probe_excluding_bounded(
+        &self,
+        key: &super::link_facts::MatchKey,
+        excluded_paths: &BTreeSet<VaultRelativePath>,
+        ceiling: usize,
+    ) -> Result<super::navigation_resolution::RegistryProbe> {
         use super::{
             link_facts::MatchKeyKind,
             navigation_resolution::{RegistryCandidate, RegistryProbe},
         };
-        if excluded_paths.len() > 16 {
+        if excluded_paths.len() > ceiling {
             return Err(WikiError::new(
                 ErrorCode::BudgetExceeded,
-                "registry replacement excludes more than 16 owners",
+                format!("registry replacement excludes more than {ceiling} owners"),
             ));
         }
         self.require_fact_layout()?;
@@ -3316,10 +3337,93 @@ mod tests {
     }
 
     #[test]
+    fn graph_registry_and_policy_exclusions_preserve_survivors_without_widening_pages() {
+        use crate::catalog::{
+            link_facts::{MatchKey, MatchKeyKind},
+            navigation_resolution::RegistryProbe,
+            source_projection::{RefreshProjectionLimits, Work},
+        };
+        use crate::graph::policy_inputs::PolicyInputKey;
+        let (temp, _root, catalog) = unsynced();
+        for suffix in ["a", "b", "c"] {
+            fs::write(temp.path().join(format!("candidate_{suffix}.md")),format!("---\nwiki_schema: \"1\"\nwiki_id: candidate_{suffix}\nwiki_kind: page\ntitle: Candidate {suffix}\naliases: [Shared]\nwiki_status: reviewed\n---\n# Candidate\n")).unwrap();
+        }
+        publish_normalized_layout(&catalog, 1, true);
+        let key = MatchKey {
+            kind: MatchKeyKind::Alias,
+            value: "Shared".into(),
+        };
+        let policy_key = PolicyInputKey::CanonicalIdentity(id("candidate_c"));
+        let reader = defaults(&catalog);
+        let seventeen: BTreeSet<_> = (0..17)
+            .map(|n| path(&format!("unrelated_{n}.md")))
+            .collect();
+        assert!(matches!(
+            reader
+                .registry_probe_for_graph_key_excluding(&key, &seventeen)
+                .unwrap(),
+            RegistryProbe::Many(_)
+        ));
+        let mut replaced = seventeen.clone();
+        replaced.insert(path("candidate_a.md"));
+        replaced.insert(path("candidate_b.md"));
+        assert!(
+            matches!(reader.registry_probe_for_graph_key_excluding(&key,&replaced).unwrap(),RegistryProbe::One(candidate) if candidate.id==id("candidate_c"))
+        );
+        let mut maximum: BTreeSet<_> = (0..767)
+            .map(|n| path(&format!("unrelated_{n}.md")))
+            .collect();
+        maximum.extend([path("candidate_a.md"), path("candidate_b.md")]);
+        assert_eq!(
+            maximum.len(),
+            super::super::graph_projection::MAX_GRAPH_WRITES
+        );
+        assert!(
+            matches!(reader.registry_probe_for_graph_key_excluding(&key,&maximum).unwrap(),RegistryProbe::One(candidate) if candidate.id==id("candidate_c"))
+        );
+        let members = reader
+            .policy_members_for_graph(&policy_key, &maximum)
+            .unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].0, path("candidate_c.md"));
+        let before = reader.usage();
+        maximum.insert(path("candidate_c.md"));
+        assert_eq!(
+            reader
+                .registry_probe_for_graph_key_excluding(&key, &maximum)
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(
+            reader
+                .policy_members_for_graph(&policy_key, &maximum)
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(reader.usage(), before);
+        // Ordinary shared Work (including Page admission) cannot acquire the
+        // larger graph exclusion scope merely by adding more replacements.
+        let limits = RefreshProjectionLimits::default();
+        let mut work = Work::new(&catalog.fs, &reader, &limits).unwrap();
+        assert!(work.graph_replacements.is_none());
+        work.replaced_registry = seventeen;
+        assert_eq!(
+            work.registry_probe(&key, true).unwrap_err().code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(
+            work.policy_members(&policy_key).unwrap_err().code,
+            ErrorCode::BudgetExceeded
+        );
+    }
+
+    #[test]
     fn registry_exclusion_sql_keeps_indexed_order_and_bound_parameters() {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch("CREATE TABLE registry_match_keys(kind TEXT NOT NULL,value TEXT NOT NULL,record_id TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(kind,value,record_id,path)); CREATE TABLE records(id TEXT PRIMARY KEY,kind TEXT NOT NULL,path TEXT NOT NULL);").unwrap();
-        for exclusions in [0, 2, 16] {
+        for exclusions in [0, 2, 16, super::super::graph_projection::MAX_GRAPH_WRITES] {
             let query = registry_probe_sql(exclusions);
             assert_eq!(
                 db.prepare(&query).unwrap().parameter_count(),

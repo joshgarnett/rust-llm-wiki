@@ -42,6 +42,12 @@ struct Fixture {
 }
 impl Fixture {
     fn new(normalized: bool) -> Self {
+        Self::with_storage(normalized, false)
+    }
+    fn legacy(normalized: bool) -> Self {
+        Self::with_storage(normalized, true)
+    }
+    fn with_storage(normalized: bool, legacy: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("citation fixture vault");
         let options = OperationOptions {
@@ -49,7 +55,16 @@ impl Fixture {
             lock_timeout_ms: 200,
             ..Default::default()
         };
-        init(&root, "Typed citations", options).unwrap();
+        if legacy {
+            fs::create_dir(&root).unwrap();
+            fs::write(
+                root.join("WIKI.md"),
+                include_bytes!("../../tests/fixtures/bootstrap/vault/WIKI.md"),
+            )
+            .unwrap();
+        } else {
+            init(&root, "Typed citations", options).unwrap();
+        }
         let app =
             OfflineApp::new(VaultFs::new(VaultRoot::explicit(&root).unwrap()), options).unwrap();
         if normalized {
@@ -65,7 +80,7 @@ impl Fixture {
         OfflineApp::new(self.app.fs().clone(), options).unwrap()
     }
     fn bytes(&self, p: &VaultRelativePath) -> Vec<u8> {
-        fs::read(self.root.join(p.as_str())).unwrap()
+        self.app.fs().read_before(p).unwrap().unwrap().bytes
     }
     fn reference(
         &self,
@@ -170,42 +185,129 @@ fn assert_navigation(
 ) {
     let base = url::Url::from_file_path(f.root.join(page.as_str())).unwrap();
     let root = fs::canonicalize(&f.root).unwrap();
+    let references = decoded_citations(markdown);
+    let (proofs, remainder) = targets.as_chunks::<3>();
+    assert!(remainder.is_empty());
+    assert_eq!(references.len(), proofs.len());
     let mut actual = Vec::new();
     for event in Parser::new(block(markdown)) {
         if let Event::Start(Tag::Link { dest_url, .. }) = event {
             assert!(
-                !dest_url.contains('#'),
-                "byte spans are not Markdown fragments"
-            );
-            assert!(
                 !dest_url.starts_with('/'),
                 "provenance destinations are relative"
             );
-            let resolved = base.join(&dest_url).unwrap().to_file_path().unwrap();
+            let destination = base.join(&dest_url).unwrap();
+            let fragment = destination.fragment().map(str::to_owned);
+            let resolved = destination.to_file_path().unwrap();
             let resolved =
                 fs::canonicalize(resolved).expect("saved Page href resolves to a real file");
             assert!(resolved.starts_with(&root), "href stays in the vault");
-            actual.push(resolved);
+            actual.push((resolved, fragment));
         }
     }
-    let expected: Vec<_> = targets
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .map(|paths| &paths[2])
-        .map(|p| fs::canonicalize(f.root.join(p.as_str())).unwrap())
-        .collect();
     assert_eq!(
         actual.len(),
-        expected.len(),
+        references.len(),
         "one exact saved-content link per distinct reference"
     );
-    for p in expected {
-        assert!(
-            actual.contains(&p),
-            "missing authenticated target {}",
-            p.display()
+    for ((resolved, fragment), (citation, proof)) in
+        actual.iter().zip(references.iter().zip(proofs))
+    {
+        let CitationRef::Source(reference) = citation else {
+            panic!("Source citation required")
+        };
+        let source_note = crate::records::parse_note(&f.bytes(&proof[0]));
+        let source = source_note.canonical.as_ref().unwrap();
+        let revision_note = crate::records::parse_note(&f.bytes(&proof[1]));
+        let revision = revision_note.canonical.as_ref().unwrap();
+        assert_eq!(source.id(), &reference.source_id);
+        assert_eq!(revision.id(), &reference.source_revision);
+        assert_eq!(
+            revision.string("wiki_source_id"),
+            Some(reference.source_id.as_str())
         );
+        let content = String::from_utf8(f.bytes(&proof[2])).unwrap();
+        assert_eq!(
+            reference.quote_hash,
+            Blake3Hash::digest(reference.span.slice(&content).unwrap())
+        );
+        let Some(presentation) =
+            crate::domain::source_presentation::SourcePresentation::from_record(source).unwrap()
+        else {
+            assert!(
+                fragment.is_none(),
+                "legacy citation links do not invent byte-span fragments"
+            );
+            assert_eq!(
+                *resolved,
+                fs::canonicalize(f.root.join(proof[2].as_str())).unwrap()
+            );
+            continue;
+        };
+        // Read canonical ownership metadata, but independently inspect the actual
+        // Markdown navigation and exact captured content; do not call renderer.
+        assert!(
+            presentation
+                .current
+                .path
+                .as_str()
+                .starts_with("sources/views/")
+        );
+        assert_eq!(
+            *resolved,
+            fs::canonicalize(f.root.join(presentation.current.path.as_str())).unwrap()
+        );
+        let anchor = format!(
+            "capture-{}",
+            Blake3Hash::digest(reference.source_revision.as_str().as_bytes()).hex()
+        );
+        assert_eq!(fragment.as_deref(), Some(format!("^{anchor}").as_str()));
+        let visible = fs::read(resolved).unwrap();
+        assert_eq!(
+            Blake3Hash::digest(&visible),
+            presentation.current.generated_hash
+        );
+        let visible = String::from_utf8(visible).unwrap();
+        let anchor_suffix = format!(" ^{anchor}");
+        let anchor_lines: Vec<_> = visible
+            .lines()
+            .filter(|line| line.ends_with(&anchor_suffix))
+            .collect();
+        assert_eq!(
+            anchor_lines.len(),
+            1,
+            "revision has exactly one live navigation anchor"
+        );
+        if source.string("wiki_current_revision") == Some(reference.source_revision.as_str()) {
+            assert!(
+                visible.contains(&content),
+                "current saved note includes the full cited capture"
+            );
+        } else {
+            let route = anchor_lines[0]
+                .split_once("[[")
+                .unwrap()
+                .1
+                .split_once("]]")
+                .unwrap()
+                .0
+                .split_once('|')
+                .unwrap()
+                .0;
+            let saved = presentation.published[&reference.source_revision]
+                .as_ref()
+                .unwrap();
+            assert_eq!(route, saved.path.as_str());
+            assert!(route.starts_with("sources/views/saved/"));
+            let saved_path = fs::canonicalize(f.root.join(route)).unwrap();
+            assert!(saved_path.starts_with(&root));
+            let bytes = fs::read(saved_path).unwrap();
+            assert_eq!(Blake3Hash::digest(&bytes), saved.generated_hash);
+            assert!(
+                String::from_utf8(bytes).unwrap().contains(&content),
+                "historical route includes the full exact old capture"
+            );
+        }
     }
 }
 
@@ -257,19 +359,27 @@ fn cited_page_title_is_readable_without_exposing_metadata_or_active_markup() {
             }
         }
         assert_eq!(links, 1);
+        let revision = crate::records::parse_note(&f.bytes(&targets[1]))
+            .canonical
+            .unwrap();
+        let captured_at = revision.string("wiki_captured_at").unwrap();
         assert_eq!(
             label,
-            title
-                .chars()
-                .map(
-                    |c| if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
-                        ' '
-                    } else {
-                        c
-                    }
-                )
-                .collect::<String>()
+            format!(
+                "{}: Saved copy from {captured_at}",
+                title
+                    .chars()
+                    .map(
+                        |c| if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                            ' '
+                        } else {
+                            c
+                        }
+                    )
+                    .collect::<String>()
+            )
         );
+        assert!(!visible.contains("older saved copy"));
         assert!(visible.contains("Sources"));
         assert!(visible.contains("checked when this page was saved"));
         assert!(!visible.contains("source_revision") && !visible.contains("quote_hash"));
@@ -290,7 +400,7 @@ fn cited_page_title_is_readable_without_exposing_metadata_or_active_markup() {
 #[test]
 fn previously_saved_citation_block_moves_and_upgrades_without_changing_author_text() {
     for normalized in [false, true] {
-        let f = Fixture::new(normalized);
+        let f = Fixture::legacy(normalized);
         let (_, citation, targets) = f.add("An older saved citation.\n");
         let from = path("pages/previous.md");
         let to = path("handbook/deep/previous.md");
@@ -366,9 +476,22 @@ fn previously_saved_citation_block_moves_and_upgrades_without_changing_author_te
             .unwrap();
         let upgraded = String::from_utf8(f.bytes(&to)).unwrap();
         assert_eq!(outside(&upgraded), outside(moved_text));
-        assert_eq!(decoded_citations(&upgraded), vec![citation]);
+        assert_eq!(decoded_citations(&upgraded), vec![citation.clone()]);
         assert_navigation(&f, &to, &upgraded, &targets);
         assert!(!block(&upgraded).contains("```json"));
+        let writer =
+            crate::vault::WriterPermit::acquire(f.app.fs().root(), std::time::Duration::ZERO)
+                .unwrap();
+        crate::storage::migrate_source_layout(
+            f.app.fs(),
+            &writer,
+            &crate::storage::SourceLayoutOptions::default(),
+        )
+        .unwrap();
+        let migrated = String::from_utf8(f.bytes(&to)).unwrap();
+        assert_eq!(outside(&migrated), outside(&upgraded));
+        assert_eq!(decoded_citations(&migrated), vec![citation]);
+        assert_navigation(&f, &to, &migrated, &targets);
     }
 }
 
@@ -944,6 +1067,8 @@ fn typed_citations_staged_page_guards_source_changes_and_stale_publication() {
             )
             .unwrap();
         let original = f.bytes(&p);
+        let source_before = f.bytes(&targets[0]);
+        let source_expected = crate::vault::ExpectedState::Hash(Blake3Hash::digest(&source_before));
         let staged_app = f.with_options(OperationOptions {
             stage_only: true,
             ..*f.app.options()
@@ -956,16 +1081,39 @@ fn typed_citations_staged_page_guards_source_changes_and_stale_publication() {
                 refs(&[citation]),
             )
             .unwrap();
-        assert!(
-            staged
-                .plan
-                .read_preconditions
+        // Publishing the first citation also updates Source presentation metadata.
+        // Its exact before-state becomes a write guard, replacing the redundant
+        // read condition while retaining the same commit requirement.
+        let source_write = staged
+            .plan
+            .operations
+            .iter()
+            .find(|operation| operation.path == targets[0])
+            .expect("citation publishes Source presentation metadata");
+        assert_eq!(source_write.before, source_expected);
+        let retained = f
+            .app
+            .changes_show(staged.change.as_ref().unwrap().change_id.clone())
+            .unwrap();
+        let retained_source_write = retained
+            .manifest
+            .operations
+            .iter()
+            .find(|operation| operation.target == targets[0])
+            .expect("retained Source write guard");
+        assert_eq!(retained_source_write.before, source_expected);
+        assert_eq!(
+            retained
+                .payloads
                 .iter()
-                .any(|dependency| dependency.path == targets[0]),
-            "mutable Source observation participates in actual commit guards"
+                .find(|payload| payload.target == targets[0])
+                .expect("retained exact Source before payload")
+                .before
+                .as_ref(),
+            Some(&source_before)
         );
         assert_eq!(f.bytes(&p), original);
-        let source_before = f.bytes(&targets[0]);
+        assert_eq!(f.bytes(&targets[0]), source_before);
         // Staging retains a reviewed proposal without activating publication.
         // A real refresh may commit and makes this Page proposal stale.
         let refreshed = f
@@ -976,20 +1124,27 @@ fn typed_citations_staged_page_guards_source_changes_and_stale_publication() {
             refreshed.status,
             Some(crate::changes::ChangeStatus::Committed)
         );
-        assert_ne!(f.bytes(&targets[0]), source_before);
+        let source_after_refresh = f.bytes(&targets[0]);
+        assert_ne!(source_after_refresh, source_before);
+        let presentation = crate::domain::source_presentation::SourcePresentation::from_record(
+            crate::records::parse_note(&source_after_refresh)
+                .canonical
+                .as_ref()
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        let display_after_refresh = f.bytes(&presentation.current.path);
         assert_eq!(f.bytes(&p), original);
         let refusal = f
             .app
             .changes_apply(staged.change.unwrap().change_id)
             .unwrap_err();
         if normalized {
-            // Exact normalized publication admission rejects the stale base
-            // before the canonical file guards can be applied.
+            // Renderer replay checks its retained display dependency before
+            // selecting a normalized publication. Refresh changed that view.
             assert_eq!(refusal.code, ErrorCode::RecoveryRequired);
-            assert_eq!(
-                refusal.message,
-                "refresh catalog is neither exact base nor intended publication"
-            );
+            assert_eq!(refusal.message, "saved-note replay dependency changed");
         } else {
             assert!(
                 matches!(
@@ -1000,6 +1155,8 @@ fn typed_citations_staged_page_guards_source_changes_and_stale_publication() {
             );
         }
         assert_eq!(f.bytes(&p), original);
+        assert_eq!(f.bytes(&targets[0]), source_after_refresh);
+        assert_eq!(f.bytes(&presentation.current.path), display_after_refresh);
     }
 }
 

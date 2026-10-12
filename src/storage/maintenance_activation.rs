@@ -18,6 +18,7 @@ struct Witness {
 pub(crate) struct ActivationProof {
     root: VaultRoot,
     witnesses: [Witness; 3],
+    kind: layout::LayoutKind,
 }
 struct OwnerState {
     root: VaultRoot,
@@ -160,6 +161,7 @@ fn capture(root: &VaultRoot) -> Result<Option<Arc<ActivationProof>>> {
             }
             let proof = ActivationProof {
                 root: root.clone(),
+                kind: validated.kind(root)?,
                 witnesses: witnesses
                     .try_into()
                     .map_err(|_| admission("activation witness shape changed"))?,
@@ -256,10 +258,10 @@ impl Drop for WorkerGuard {
     }
 }
 /// None means owner execution; Some(result) is an admitted worker observation.
-pub(crate) fn worker_active(root: &VaultRoot) -> Option<Result<bool>> {
+pub(crate) fn worker_kind(root: &VaultRoot) -> Option<Result<layout::LayoutKind>> {
     WORKER.with(|slot| {
         slot.borrow().as_ref().map(|proof| match proof {
-            Some(proof) => proof.active(root),
+            Some(proof) => proof.active(root).map(|_| proof.kind),
             None => Err(admission(
                 "parallel worker reached activation without owner proof",
             )),

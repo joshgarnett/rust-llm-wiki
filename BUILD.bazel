@@ -164,7 +164,16 @@ owned_crate_test(
     crate = ":lwiki_lib",
     compile_data = [":compile_assets"],
     data = [":test_assets"],
-    args = ["compact_checkpoint", "legacy_checkpoint_migrates", "storage_cleanup_preserves_legacy_checkpoint", "interrupted_storage_blocks"],
+    args = [
+        "compact_checkpoint",
+        "legacy_checkpoint_migrates",
+        "storage_cleanup_preserves_legacy_checkpoint",
+        "interrupted_storage_blocks",
+        "storage::source_layout::tests",
+        "app::init_recovery::tests",
+        "app::normalized_graph_write_tests",
+        "graph_generation_publication",
+    ],
 )
 
 test_suite(
@@ -183,6 +192,8 @@ test_suite(
         ":page_move_identity_test",
         ":context_freshness_test",
         ":graph_queries_test",
+        ":graph_workflow_cli_test",
+        ":search_presentation_cli_test",
         ":provider_dispatch_test",
         ":remote_cli_test",
         ":config_provider_scope_test",

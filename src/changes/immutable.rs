@@ -859,8 +859,22 @@ fn private_stage(
         return Ok(false);
     }
     let parent = path.as_str().rsplit_once('/').expect("stage parent").0;
-    let bytes = read_bounded(&engine.fs, path, MAX_PAYLOAD_BYTES)?
-        .ok_or_else(|| conflict("stage disappeared"))?;
+    // Temporary filenames are deliberately outside canonical Source grammar.
+    // Resolve only the manifest-admitted tree, then inspect its exact private
+    // member physically; never grant arbitrary logical temporary-path mapping.
+    let member = path
+        .as_str()
+        .strip_prefix(&format!("{}/", tree.root))
+        .ok_or_else(|| conflict("private stage is outside its admitted revision tree"))?;
+    let physical_tree = crate::storage::layout::physical_relative(engine.fs.root(), &tree.root)?;
+    let physical_stage = VaultRelativePath::new(format!("{physical_tree}/{member}"))?;
+    let bytes = crate::vault::fs::read_regular_raw_checked(
+        engine.fs.root(),
+        &physical_stage,
+        MAX_PAYLOAD_BYTES,
+        &mut |_, _, _| Ok(()),
+    )?
+    .ok_or_else(|| conflict("stage disappeared"))?;
     for (index, operation) in manifest.operations.iter().enumerate() {
         if tree.members.contains_key(&operation.target)
             && operation

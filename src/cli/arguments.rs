@@ -28,6 +28,9 @@ pub struct Arguments {
     /// Emit JSON Lines events for supported streaming commands.
     #[arg(long, global = true)]
     pub jsonl: bool,
+    /// Include detailed search diagnostics and exact citation metadata in human output.
+    #[arg(long, global = true)]
+    pub verbose: bool,
     /// Prevent provider requests and credential helper calls; local operations remain available.
     #[arg(long, global = true)]
     pub offline: bool,
@@ -118,9 +121,9 @@ pub enum Command {
     Init {
         /// Wiki directory; existing folders require --existing.
         path: PathBuf,
-        /// Human-readable title.
-        #[arg(long, default_value = "Local wiki")]
-        title: String,
+        /// Wiki title; defaults to Local wiki, or keeps the title of an interrupted setup.
+        #[arg(long)]
+        title: Option<String>,
         /// Initialize an existing folder without adopting its notes.
         #[arg(long)]
         existing: bool,

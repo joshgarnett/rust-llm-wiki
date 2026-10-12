@@ -167,6 +167,7 @@ impl Fixture {
                 citation: None,
             },
             secondary_excerpts: vec![],
+            declared_source_refs: vec![],
             reasons: vec![],
             rank_contributions: vec![],
             source_id: Some(source_id.clone()),

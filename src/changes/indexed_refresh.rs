@@ -25,6 +25,10 @@ mod legacy_terminal_view;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum IndexedWriteOperation {
+    GraphBatch {
+        action: GraphWriteAction,
+        records: Vec<IndexedGraphTarget>,
+    },
     SourceRefresh {
         source_id: RecordId,
     },
@@ -46,6 +50,10 @@ pub(crate) enum IndexedWriteOperation {
     PageBatch {
         pages: Vec<IndexedPageTarget>,
     },
+    PageWithSources {
+        pages: Vec<IndexedPageTarget>,
+        sources: Vec<IndexedSourcePresentationTarget>,
+    },
     LiteralEdit {
         path: VaultRelativePath,
     },
@@ -63,11 +71,40 @@ pub(crate) enum IndexedWriteOperation {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum GraphWriteAction {
+    Packet,
+    Import,
+    Resolve,
+    Review,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IndexedGraphTarget {
+    pub path: VaultRelativePath,
+    pub id: RecordId,
+    pub kind: crate::domain::RecordKind,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GraphAdmission {
+    pub prepared_journal_hash: Blake3Hash,
+}
+pub(crate) const MAX_GRAPH_ENVELOPE_BYTES: usize = MAX_JOURNAL_BYTES;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct IndexedPageTarget {
     pub path: VaultRelativePath,
     pub id: RecordId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IndexedSourcePresentationTarget {
+    pub source_id: RecordId,
+    pub revisions: Vec<RecordId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,12 +155,45 @@ pub(crate) struct IndexedRefreshSourceDependency {
 impl IndexedWriteOperation {
     pub(crate) fn validate(&self) -> Result<()> {
         match self {
+            Self::GraphBatch { action, records } => {
+                crate::catalog::graph_projection::validate_descriptor(*action, records)
+            }
             Self::JobBatch {
                 run_id,
                 records,
                 checkpoint,
             } => {
                 use crate::domain::RecordKind;
+                // Shape only. Typed Received admission and sealed payload replay
+                // prove the exact attempt-derived IDs and output/receipt bytes.
+                let graph_output = if records.len() == 2
+                    && checkpoint.is_none()
+                    && records.iter().all(|r| r.kind == RecordKind::RunEvent)
+                {
+                    records.iter().find(|r| {
+                        r.id.as_str()
+                            .strip_prefix("run_event_generation_")
+                            .is_some_and(|hash| {
+                                hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                            })
+                            && r.path.as_str() == format!("runs/{run_id}/outputs/{}.md", r.id)
+                            && records.iter().any(|other| {
+                                other.id != r.id
+                                    && other
+                                        .id
+                                        .as_str()
+                                        .strip_prefix("run_event_receipt_")
+                                        .is_some_and(|hash| {
+                                            hash.len() == 64
+                                                && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                                        })
+                                    && other.path.as_str()
+                                        == format!("runs/{run_id}/events/{}.md", other.id)
+                            })
+                    })
+                } else {
+                    None
+                };
                 let ids: std::collections::BTreeSet<_> = records.iter().map(|r| &r.id).collect();
                 if records.is_empty()
                     || records.len() > 3
@@ -138,7 +208,8 @@ impl IndexedWriteOperation {
                         }
                         RecordKind::RunEvent => {
                             r.id == *run_id
-                                || r.path.as_str() != format!("runs/{run_id}/events/{}.md", r.id)
+                                || (r.path.as_str() != format!("runs/{run_id}/events/{}.md", r.id)
+                                    && graph_output != Some(r))
                         }
                         _ => true,
                     })
@@ -254,6 +325,29 @@ impl IndexedWriteOperation {
             Self::LiteralEdit { path } => {
                 crate::catalog::literal_projection::require_literal_path(path)
             }
+            Self::PageWithSources { pages, sources } => {
+                Self::PageBatch {
+                    pages: pages.clone(),
+                }
+                .validate()?;
+                if sources.is_empty()
+                    || sources.len() > 16
+                    || !sources
+                        .windows(2)
+                        .all(|pair| pair[0].source_id < pair[1].source_id)
+                    || sources.iter().any(|source| {
+                        source.revisions.is_empty()
+                            || source.revisions.len() > 16
+                            || !source.revisions.windows(2).all(|pair| pair[0] < pair[1])
+                            || pages.iter().any(|page| page.id == source.source_id)
+                    })
+                {
+                    return Err(recovery(
+                        "cited Page requires sorted distinct Source and capture targets",
+                    ));
+                }
+                Ok(())
+            }
             Self::PageBatch { pages } => {
                 let ids: std::collections::BTreeSet<_> =
                     pages.iter().map(|page| &page.id).collect();
@@ -356,10 +450,26 @@ fn publication(snapshot: &ReadSnapshot) -> Result<Publication> {
     })
 }
 impl IndexedRefreshProof {
+    pub(crate) fn activation_binding(&self) -> Result<Option<Blake3Hash>> {
+        if self.version != 5 {
+            return Ok(None);
+        }
+        Ok(Some(Blake3Hash::digest(
+            serde_json::to_vec(&("lwiki.graph-active-intent.v1", self))
+                .map_err(|e| WikiError::invalid(e.to_string()))?,
+        )))
+    }
     fn validate(&self, vault: &RecordId, change: &PreparedChange) -> Result<()> {
         match (self.version, &self.source_id, &self.operation) {
             (2, Some(_), None) => {}
-            (3, None, Some(operation)) => operation.validate()?,
+            (3, None, Some(operation))
+                if !matches!(operation, IndexedWriteOperation::GraphBatch { .. }) =>
+            {
+                operation.validate()?
+            }
+            (5, None, Some(operation @ IndexedWriteOperation::GraphBatch { .. })) => {
+                operation.validate()?
+            }
             (4, None, Some(operation @ IndexedWriteOperation::PageBatch { pages }))
                 if pages.len() == 1 =>
             {
@@ -436,7 +546,7 @@ impl IndexedRefreshProof {
                 "legacy Page envelope requires one unchanged inverse replacement",
             ));
         }
-        if self.version == 4 {
+        if matches!(self.version, 4 | 5) {
             super::prepare::validate_retained_targets(
                 &self
                     .before
@@ -444,6 +554,9 @@ impl IndexedRefreshProof {
                     .map(|dependency| dependency.path.clone())
                     .collect::<Vec<_>>(),
             )?;
+        }
+        if let Some(IndexedWriteOperation::GraphBatch { action, records }) = &self.operation {
+            crate::catalog::graph_projection::validate_manifest_shape(manifest, *action, records)?;
         }
         if let Some(IndexedWriteOperation::JobBatch {
             run_id,
@@ -505,6 +618,44 @@ impl IndexedRefreshProof {
                         "compact asset must precede its exact guarded Run after-image",
                     ));
                 }
+            } else if records
+                .iter()
+                .any(|r| r.path.as_str() == format!("runs/{run_id}/outputs/{}.md", r.id))
+            {
+                let receipt_id = manifest.allocated_ids.get("receipt").ok_or_else(|| {
+                    recovery("graph generation job requires an allocated accounted receipt")
+                })?;
+                let receipt_path = format!("runs/{run_id}/events/{receipt_id}.md");
+                let receipt = manifest
+                    .operations
+                    .iter()
+                    .position(|op| op.target.as_str() == receipt_path)
+                    .ok_or_else(|| recovery("graph generation receipt target is absent"))?;
+                let output = manifest
+                    .operations
+                    .iter()
+                    .position(|op| {
+                        records.iter().any(|r| {
+                            op.target == r.path
+                                && r.path.as_str() == format!("runs/{run_id}/outputs/{}.md", r.id)
+                        })
+                    })
+                    .ok_or_else(|| recovery("graph generation output target is absent"))?;
+                if records.len() != 2
+                    || manifest.operations.len() != 2
+                    || receipt == output
+                    || manifest.title != "Retain accounted response receipt"
+                    || manifest.origin.is_some()
+                    || manifest.inverse_of.is_some()
+                    || manifest.allocated_ids.len() != 2
+                    || manifest.allocated_ids.get("run") != Some(run_id)
+                    || !manifest.operations[output].apply_after.is_empty()
+                    || manifest.operations[receipt].apply_after != vec![output]
+                {
+                    return Err(recovery(
+                        "graph generation job requires one immutable output before its exact receipt",
+                    ));
+                }
             } else if records.len() == 3 {
                 // Structural shape only: fresh sealing and retained delta replay
                 // must still authenticate the exact typed relation payloads.
@@ -553,12 +704,19 @@ impl IndexedRefreshProof {
             }
         }
         if let Some(IndexedWriteOperation::SourceWithdraw { .. }) = &self.operation
-            && (manifest.operations.len() != 1
-                || !matches!(manifest.operations[0].before, ExpectedState::Hash(_))
-                || !matches!(manifest.operations[0].after, ExpectedState::Hash(_)))
+            && (manifest.operations.is_empty()
+                || manifest.operations.len() > 2
+                || !manifest
+                    .operations
+                    .iter()
+                    .any(|op| matches!(op.before, ExpectedState::Hash(_)))
+                || manifest
+                    .operations
+                    .iter()
+                    .any(|op| !matches!(op.after, ExpectedState::Hash(_))))
         {
             return Err(recovery(
-                "withdrawal must replace exactly one existing Source",
+                "withdrawal must replace one existing Source and at most its generated saved note",
             ));
         }
         if let Some(IndexedWriteOperation::LiteralEdit { path }) = &self.operation
@@ -687,7 +845,7 @@ impl IndexedRefreshProof {
                         "indexed refresh baseline grants an undeclared mutation",
                     ));
                 }
-                if self.version != 4
+                if !matches!(self.version, 4 | 5)
                     && !manifest
                         .read_preconditions
                         .iter()
@@ -738,6 +896,7 @@ fn require_active(authority: &Authority, proof: &IndexedRefreshProof) -> Result<
     if active.change != proof.change
         || active.starting != publication(&proof.base)?
         || active.intended != publication(&proof.intended)?
+        || active.intent_hash != proof.activation_binding()?
     {
         return Err(recovery(
             "indexed refresh differs from exact active reservation",
@@ -767,12 +926,24 @@ impl ChangeEngine {
             Option<crate::catalog::source_refresh::RetainedDelta>,
         )>,
     > {
+        self.load_indexed_refresh_retention_with_reader(change, &mut |p, m| {
+            read_bounded(&self.fs, p, m)
+        })
+    }
+    pub(crate) fn load_indexed_refresh_retention_with_reader(
+        &self,
+        change: &PreparedChange,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<
+        Option<(
+            IndexedRefreshProof,
+            Option<crate::catalog::source_refresh::RetainedDelta>,
+        )>,
+    > {
         crate::maintenance_diagnostic::observe(
             crate::maintenance_diagnostic::Phase::RetainedAuthority,
             || {
-                let Some(bytes) =
-                    read_bounded(&self.fs, &baseline_path(change)?, MAX_JOURNAL_BYTES)?
-                else {
+                let Some(bytes) = reader(&baseline_path(change)?, MAX_JOURNAL_BYTES)? else {
                     return Ok(None);
                 };
                 let (proof, delta) = self.decode_indexed_refresh_retention(change, &bytes)?;
@@ -808,10 +979,13 @@ impl ChangeEngine {
             crate::maintenance_diagnostic::Phase::RetainedAuthority,
             || {
                 let receipt: Receipt = strict_json(bytes)?;
-                let encoded = if receipt.proof.version == 4 {
-                    if bytes.len() > MAX_LEGACY_PAGE_ENVELOPE_BYTES
-                        || receipt.embedded_delta.is_none()
-                    {
+                let encoded = if matches!(receipt.proof.version, 4 | 5) {
+                    let maximum = if receipt.proof.version == 5 {
+                        MAX_GRAPH_ENVELOPE_BYTES
+                    } else {
+                        MAX_LEGACY_PAGE_ENVELOPE_BYTES
+                    };
+                    if bytes.len() > maximum || receipt.embedded_delta.is_none() {
                         return Err(recovery(
                             "legacy Page envelope size or embedded delta invalid",
                         ));
@@ -856,15 +1030,35 @@ impl ChangeEngine {
         proof: &IndexedRefreshProof,
         delta: &crate::catalog::source_refresh::RetainedDelta,
     ) -> Result<()> {
-        writer.require_root(self.fs.root())?;
-        self.require_binding()?;
         if proof.version != 4 {
             return Err(recovery("legacy Page envelope requires version4"));
         }
+        self.stage_embedded_envelope(writer, proof, delta, MAX_LEGACY_PAGE_ENVELOPE_BYTES)
+    }
+    pub(crate) fn stage_graph_envelope(
+        &self,
+        writer: &WriterPermit,
+        proof: &IndexedRefreshProof,
+        delta: &crate::catalog::source_refresh::RetainedDelta,
+    ) -> Result<()> {
+        if proof.version != 5 {
+            return Err(recovery("graph envelope requires version5"));
+        }
+        self.stage_embedded_envelope(writer, proof, delta, MAX_GRAPH_ENVELOPE_BYTES)
+    }
+    fn stage_embedded_envelope(
+        &self,
+        writer: &WriterPermit,
+        proof: &IndexedRefreshProof,
+        delta: &crate::catalog::source_refresh::RetainedDelta,
+        maximum: usize,
+    ) -> Result<()> {
+        writer.require_root(self.fs.root())?;
+        self.require_binding()?;
         let (manifest, hash) = self.load_manifest_structure(&proof.change.change_id)?;
         proof.validate_manifest(&manifest)?;
         if hash != proof.change.manifest_hash {
-            return Err(recovery("legacy Page manifest changed"));
+            return Err(recovery("first indexed manifest changed"));
         }
         let state = journal::load_journal(&self.fs, &manifest, &hash)?;
         if state.status != Some(ChangeStatus::Prepared)
@@ -873,18 +1067,15 @@ impl ChangeEngine {
             || outcome::terminal_report(&self.fs, &manifest, &hash)?.is_some()
         {
             return Err(recovery(
-                "legacy Page envelope needs original never-started Prepared history",
+                "first indexed envelope needs original never-started Prepared history",
             ));
         }
         let authority = required_authority(self)?;
         authority.require_publication(&publication(&proof.base)?)?;
         if authority.publication() != &publication(&proof.base)? {
-            return Err(recovery("legacy Page admission base changed"));
+            return Err(recovery("first indexed admission base changed"));
         }
-        crate::catalog::normalized_delta::counted(
-            &(proof, Some(delta)),
-            MAX_LEGACY_PAGE_ENVELOPE_BYTES,
-        )?;
+        crate::catalog::normalized_delta::counted(&(proof, Some(delta)), maximum)?;
         let embedded_delta = Some(delta.clone());
         let checksum = Blake3Hash::digest(
             serde_json::to_vec(&(proof, &embedded_delta))
@@ -895,10 +1086,10 @@ impl ChangeEngine {
             embedded_delta,
             checksum,
         };
-        crate::catalog::normalized_delta::counted(&receipt, MAX_LEGACY_PAGE_ENVELOPE_BYTES)?;
+        crate::catalog::normalized_delta::counted(&receipt, maximum)?;
         let bytes = serde_json::to_vec(&receipt).map_err(|e| WikiError::invalid(e.to_string()))?;
-        if bytes.len() > MAX_LEGACY_PAGE_ENVELOPE_BYTES {
-            return Err(recovery("legacy Page envelope exceeds bound"));
+        if bytes.len() > maximum {
+            return Err(recovery("first indexed envelope exceeds bound"));
         }
         if read_bounded(
             &self.fs,
@@ -907,7 +1098,7 @@ impl ChangeEngine {
         )?
         .is_some()
         {
-            return Err(recovery("legacy Page admission found separate delta"));
+            return Err(recovery("first indexed admission found separate delta"));
         }
         let staged = self
             .fs
@@ -966,7 +1157,7 @@ impl ChangeEngine {
                             .sync_target(&baseline_path(&proof.change)?, writer)?,
                     );
                 }
-                if !allow_create || proof.version == 4 {
+                if !allow_create || matches!(proof.version, 4 | 5) {
                     return Err(recovery(
                         "active indexed refresh lost its original baseline",
                     ));
@@ -1085,10 +1276,29 @@ impl ChangeEngine {
                     &proof.change,
                     publication(&proof.intended)?,
                 )?;
-                legacy_terminal_view::finalize(self, writer, &proof.change)?;
+                self.finalize_indexed_retention(writer, &proof.change)?;
                 Ok(())
             },
         )
+    }
+
+    /// The caller has proved and synced the committed outcome. Legacy Page
+    /// receipts keep their exact v4 archive/v3-view handoff; graph v5 keeps the
+    /// complete authenticated envelope at its original path permanently.
+    fn finalize_indexed_retention(
+        &self,
+        writer: &WriterPermit,
+        change: &PreparedChange,
+    ) -> Result<()> {
+        writer.require_root(self.fs.root())?;
+        let proof = self
+            .load_indexed_refresh_proof(change)?
+            .ok_or_else(|| recovery("terminal indexed retention is missing"))?;
+        match proof.version {
+            5 => Ok(()),
+            2..=4 => legacy_terminal_view::finalize(self, writer, change),
+            _ => Err(recovery("terminal indexed retention version differs")),
+        }
     }
 
     /// Historical terminal retries must run before constructing a live session:
@@ -1160,7 +1370,7 @@ impl ChangeEngine {
             return Err(recovery("historical refresh receipt changed while syncing"));
         }
         if report.status == ChangeStatus::Committed {
-            legacy_terminal_view::finalize(self, writer, change)?;
+            self.finalize_indexed_retention(writer, change)?;
         }
         Ok(Some(report))
     }
@@ -1235,7 +1445,7 @@ impl ChangeEngine {
                         ));
                     }
                     outcome::sync_receipt(&self.fs, writer, &proof.change.change_id)?;
-                    legacy_terminal_view::finalize(self, writer, &proof.change)?;
+                    self.finalize_indexed_retention(writer, &proof.change)?;
                     return Ok(report);
                 }
                 require_active(&authority, &proof)?;
@@ -1326,13 +1536,24 @@ impl ChangeEngine {
                     }
                     session.verify_selected(false, false)?;
                     session.validate_before_files()?;
-                    authority = operations::begin(
-                        &self.fs,
-                        writer,
-                        &authority,
-                        proof.change.clone(),
-                        publication(&proof.intended)?,
-                    )?;
+                    authority = if let Some(binding) = proof.activation_binding()? {
+                        operations::begin_with_intent(
+                            &self.fs,
+                            writer,
+                            &authority,
+                            proof.change.clone(),
+                            publication(&proof.intended)?,
+                            Some(binding),
+                        )?
+                    } else {
+                        operations::begin(
+                            &self.fs,
+                            writer,
+                            &authority,
+                            proof.change.clone(),
+                            publication(&proof.intended)?,
+                        )?
+                    };
                 }
                 require_active(&authority, &proof)?;
                 let mixed = matches!(
@@ -1354,7 +1575,7 @@ impl ChangeEngine {
                     );
                 }
                 // Verify retained payloads before the shared executor can mutate.
-                self.validate_manifest(&manifest, &proof.change.change_id)?;
+                session.validate_retained_manifest(self, &manifest)?;
                 let guard = self.indexed_revision_guard(
                     writer,
                     &proof.change,

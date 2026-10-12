@@ -11,6 +11,13 @@ pub mod events;
 mod ledger;
 pub(crate) use ledger::initial_inspection;
 mod replay;
+/// Pure inspection of already authenticated storage history. This does not
+/// establish checkpoint authority, current source freshness or send permission.
+pub(crate) fn replay_storage_frames(
+    frames: &[JournalFrame],
+) -> crate::domain::Result<LedgerInspection> {
+    Ok(replay::replay(frames, 0)?.inspection)
+}
 pub mod tasks;
 #[cfg(test)]
 #[allow(

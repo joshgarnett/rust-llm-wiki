@@ -86,6 +86,7 @@ fn discovery_placeholder(
             citation: None,
         },
         secondary_excerpts: vec![],
+        declared_source_refs: vec![],
         reasons: vec![RetrievalReason::Semantic],
         rank_contributions: vec![RankContribution {
             channel: "dense".into(),

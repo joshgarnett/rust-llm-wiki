@@ -233,6 +233,9 @@ impl FactDelta {
             let job_record = delta.version == 3
                 && matches!(row.record.kind(), RecordKind::Run | RecordKind::RunEvent)
                 && matches!(operation, Some(crate::changes::indexed_refresh::IndexedWriteOperation::JobBatch { records, .. }) if records.iter().any(|target| target.id == *row.record.id() && target.path == row.path && target.kind == row.record.kind()));
+            let graph_record = delta.version == 3
+                && matches!(operation, Some(crate::changes::indexed_refresh::IndexedWriteOperation::GraphBatch { records, .. })
+                    if records.iter().any(|target| target.id == *row.record.id() && target.path == row.path && target.kind == row.record.kind()));
             match load_record(c, row.record.id(), stats)? {
                 Some(old) => {
                     if let Some(
@@ -268,6 +271,7 @@ impl FactDelta {
                         && old.record == row.record;
                     if old.record.kind() != RecordKind::Source
                         && !navigation_rewrite
+                        && !graph_record
                         && !(job_record && old.record.kind() == RecordKind::Run)
                         && !(delta.version == 3 && old.record.kind() == RecordKind::Page)
                         && (old.record != row.record || old.hash != row.hash)
@@ -277,9 +281,22 @@ impl FactDelta {
                         ));
                     }
                     if old.record.kind() == RecordKind::Source {
+                        // The typed Source operation is additionally admitted by
+                        // exact presentation renderer replay in source_refresh.
+                        // Unrelated/untyped deltas cannot mutate this ownership.
+                        let presentation = delta.version == 3 && match operation {
+                            Some(crate::changes::indexed_refresh::IndexedWriteOperation::SourceRefresh { source_id }
+                                | crate::changes::indexed_refresh::IndexedWriteOperation::SourceWithdraw { source_id }) => source_id == row.record.id(),
+                            Some(crate::changes::indexed_refresh::IndexedWriteOperation::SourceRefreshBatch { refreshes, .. }) => refreshes.iter().any(|target| &target.source_id == row.record.id()),
+                            Some(crate::changes::indexed_refresh::IndexedWriteOperation::PageWithSources { sources, .. }) => sources.iter().any(|target| &target.source_id == row.record.id()),
+                            _ => false,
+                        };
                         let withdrawal = delta.version == 3
                             && matches!(operation, Some(crate::changes::indexed_refresh::IndexedWriteOperation::SourceWithdraw { source_id }) if source_id == row.record.id());
                         let retained = |key: &&String| {
+                            if presentation && key.as_str() == "wiki_presentation" {
+                                return false;
+                            }
                             if withdrawal {
                                 !matches!(
                                     key.as_str(),
@@ -323,6 +340,7 @@ impl FactDelta {
                 }
                 None => {
                     if !(row.record.kind() == RecordKind::Revision
+                        || graph_record
                         || job_record
                         || delta.version == 3
                             && matches!(row.record.kind(), RecordKind::Page | RecordKind::Source))

@@ -271,26 +271,56 @@ impl SourceStore {
                 serde_json::json!([revision_id.as_str()]),
             ),
         ]));
+        let mut presentation_dependencies = Vec::new();
+        if crate::storage::layout::layout_kind(self.fs.root())?
+            == crate::storage::layout::LayoutKind::ReadableSources
+        {
+            let source = CanonicalRecord::new(fields.clone())?;
+            let presentation = super::presentation_planning::plan_change(
+                &source,
+                b"",
+                None,
+                &operations,
+                &Default::default(),
+                &mut |path, maximum| {
+                    crate::vault::fs::read_regular_bounded(
+                        self.fs.root(),
+                        path,
+                        false,
+                        maximum,
+                        "saved-note",
+                    )
+                },
+            )?;
+            fields.insert(
+                "wiki_presentation".into(),
+                presentation.plan.metadata.encode()?.into(),
+            );
+            presentation_dependencies = presentation.dependencies;
+            operations.extend(presentation.plan.writes);
+        }
         let mut head = create_write(
             source_path,
             record_bytes(CanonicalRecord::new(fields)?, b"")?,
         );
         head.apply_after = operations.iter().map(|op| op.target.clone()).collect();
         operations.push(head);
+        let mut change = draft(
+            format!("Capture {}", request.title),
+            operations,
+            BTreeMap::from([
+                ("source".into(), source_id.clone()),
+                ("revision".into(), revision_id.clone()),
+            ]),
+        );
+        change.read_preconditions = presentation_dependencies.clone();
         Ok(SourcePlan {
-            draft: Some(draft(
-                format!("Capture {}", request.title),
-                operations,
-                BTreeMap::from([
-                    ("source".into(), source_id.clone()),
-                    ("revision".into(), revision_id.clone()),
-                ]),
-            )),
+            draft: Some(change),
             source_id,
             revision_id,
             reused: false,
             invalidation: InvalidationInputs::default(),
-            dependencies: vec![],
+            dependencies: presentation_dependencies,
             capture_state: Some(extraction.capture_state()),
         })
     }
@@ -460,6 +490,35 @@ impl SourceStore {
         ]);
         if title_changed {
             changes.insert("title".into(), title.into());
+        }
+        if crate::storage::layout::layout_kind(self.fs.root())?
+            == crate::storage::layout::LayoutKind::ReadableSources
+        {
+            let proposed = super::presentation_planning::proposed_source(source_note, &changes)?;
+            let presentation = super::presentation_planning::plan_change(
+                &proposed,
+                source_note.body(),
+                Some(source_note),
+                &operations,
+                &Default::default(),
+                &mut |path, maximum| {
+                    crate::vault::fs::read_regular_bounded(
+                        self.fs.root(),
+                        path,
+                        false,
+                        maximum,
+                        "saved-note",
+                    )
+                },
+            )?;
+            changes.insert(
+                "wiki_presentation".into(),
+                presentation.plan.metadata.encode()?.into(),
+            );
+            for dependency in presentation.dependencies {
+                deps.insert(dependency.path, dependency.expected);
+            }
+            operations.extend(presentation.plan.writes);
         }
         let head = ExpectedWrite {
             target: source_path.clone(),

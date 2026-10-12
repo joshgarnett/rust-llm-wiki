@@ -371,6 +371,7 @@ fn analyze(fs: &VaultFs, options: &StorageOptions) -> Result<Analysis> {
     })
 }
 pub fn plan_cleanup(fs: &VaultFs, options: &StorageOptions) -> Result<StoragePlan> {
+    require_no_source_migration(fs)?;
     let analysis = analyze(fs, options)?;
     let mut plan = analysis.public.clone();
     if plan.blockers.is_empty() {
@@ -381,6 +382,15 @@ pub fn plan_cleanup(fs: &VaultFs, options: &StorageOptions) -> Result<StoragePla
             - i64::try_from(plan.planned_copy_bytes).unwrap_or(i64::MAX);
     }
     Ok(plan)
+}
+fn require_no_source_migration(fs: &VaultFs) -> Result<()> {
+    if layout::raw_read(fs.root(), &rel(super::source_layout::PENDING)?, MAX_RECEIPT)?.is_some() {
+        return Err(WikiError::new(
+            ErrorCode::RecoveryRequired,
+            "saved-note migration is incomplete; run storage migrate to finish it before cleanup",
+        ));
+    }
+    Ok(())
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -599,6 +609,21 @@ fn completed_expiries(
     changes: &[ChangeInspection],
 ) -> Result<BTreeSet<ExpiryKey>> {
     let mut result = BTreeSet::new();
+    // Bootstrap3 and migration3 use this same retained receipt directory. Only
+    // the exact active, strictly verified layout3 epoch is a non-cleanup plan;
+    // unknown or corrupt receipts must still fail ordinary cleanup validation.
+    let source_layout = layout::raw_read(fs.root(), &rel(layout::ACTIVE)?, 4096)?
+        .map(|bytes| layout::decode::<layout::Layout>(&bytes))
+        .transpose()?
+        .filter(|active| active.version == 3);
+    if let Some(active) = &source_layout {
+        super::source_layout::verify_activation_with_reader(active, &mut |path, limit| {
+            layout::raw_read(fs.root(), path, limit)
+        })?;
+        if active.vault_id != inventory.vault_id {
+            return Err(err("saved-note activation belongs to another vault"));
+        }
+    }
     let retained: BTreeMap<_, _> = changes
         .iter()
         .map(|c| (c.manifest.change_id.clone(), c))
@@ -609,6 +634,18 @@ fn completed_expiries(
     }) {
         let bytes = layout::raw_read(fs.root(), &file.path, MAX_RECEIPT)?
             .ok_or_else(|| err("retained cleanup plan disappeared"))?;
+        if let Some(active) = &source_layout
+            && file.path
+                == rel(format!(
+                    ".wiki/state/storage/receipts/{}.plan.json",
+                    active.migration_id
+                ))?
+        {
+            if Blake3Hash::digest(&bytes) != active.migration_hash {
+                return Err(err("saved-note receipt changed during cleanup analysis"));
+            }
+            continue;
+        }
         let epoch: Epoch = layout::decode(&bytes)?;
         validate_epoch_bounds(&epoch)?;
         let receipt_path = rel(format!(".wiki/state/storage/receipts/{}.json", epoch.id))?;
@@ -865,12 +902,13 @@ fn build_epoch(fs: &VaultFs, analysis: Analysis, options: &StorageOptions) -> Re
     let marker = layout::raw_read(fs.root(), &rel("WIKI.md")?, 1024 * 1024)?
         .ok_or_else(|| err("vault marker missing"))?;
     let parsed = crate::records::parse_note(&marker);
-    let marker_after = if parsed
-        .canonical
-        .as_ref()
-        .and_then(|r| r.string("wiki_schema"))
-        == Some("2")
-    {
+    let marker_after = if matches!(
+        parsed
+            .canonical
+            .as_ref()
+            .and_then(|r| r.string("wiki_schema")),
+        Some("2" | "3")
+    ) {
         marker.clone()
     } else {
         crate::records::edit::migrate_schema(&parsed, "2", &Blake3Hash::digest(&marker))?
@@ -945,8 +983,11 @@ fn validate_epoch_actions(fs: &VaultFs, epoch: &Epoch, options: &StorageOptions)
         .ok_or_else(|| err("cleanup original marker invalid"))?;
     if original.kind() != RecordKind::Vault
         || original.id() != &epoch.vault_id
-        || crate::records::edit::migrate_schema(&parsed, "2", &epoch.marker_before)?
-            != epoch.marker_after
+        || (if original.string("wiki_schema") == Some("3") {
+            epoch.marker_original.clone()
+        } else {
+            crate::records::edit::migrate_schema(&parsed, "2", &epoch.marker_before)?
+        }) != epoch.marker_after
     {
         return Err(err(
             "cleanup marker replacement is not the exact schema-only migration",
@@ -1283,7 +1324,7 @@ fn resume_epoch(
             "post-cleanup inventory incomplete; epoch retained for resume",
         ));
     }
-    let mut report=StorageReport{operation_id:epoch.id,resumed,layout_version:2,before:epoch.before,after:after.totals,
+    let mut report=StorageReport{operation_id:epoch.id,resumed,layout_version:after.layout_version,before:epoch.before,after:after.totals,
         deleted_files:epoch.deletes.len() as u64,deleted_bytes:epoch.deletes.iter().map(|f|f.bytes).sum(),
         copied_files:epoch.copies.len() as u64,copied_bytes:epoch.copies.iter().map(|f|f.bytes).sum(),protected:epoch.protected.clone(),warnings:expiry_warnings(&epoch.protected),
         backup:"Full vault backup including .wiki is required; knowledge-only copies cannot resume old accounting; downgrade restores the pre-upgrade full backup.".into()};
@@ -1313,6 +1354,7 @@ pub fn cleanup(
 ) -> Result<StorageReport> {
     validate(options)?;
     writer.require_root(fs.root())?;
+    require_no_source_migration(fs)?;
     let recovery_fs = fs.for_storage_recovery();
     let fs = &recovery_fs;
     let (vault_id, _) = layout::vault(fs.root())?;
@@ -1388,7 +1430,7 @@ pub fn cleanup(
         return Ok(StorageReport {
             operation_id: RecordId::new("cleanup_noop")?,
             resumed: false,
-            layout_version: 2,
+            layout_version: layout::layout_kind(fs.root())? as u32,
             before: epoch.before.clone(),
             after: epoch.before,
             deleted_files: 0,

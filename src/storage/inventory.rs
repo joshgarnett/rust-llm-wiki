@@ -40,7 +40,7 @@ pub fn inventory(fs: &VaultFs, options: &StorageOptions) -> Result<StorageInvent
     let (vault_id, _) = layout::vault(fs.root())?;
     let mut result = StorageInventory {
         vault_id,
-        layout_version: if layout::active(fs.root())? { 2 } else { 1 },
+        layout_version: layout::layout_kind(fs.root())? as u32,
         complete: true,
         totals: StorageTotals::default(),
         files: vec![],

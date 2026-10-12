@@ -10,8 +10,23 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Duration};
 
+#[path = "graph_generation_publication.rs"]
+mod graph_generation_publication;
 #[path = "source_relation_publication.rs"]
 mod source_relation_publication;
+
+pub(crate) struct GraphGenerationCommitted {
+    pub change: PreparedChange,
+    pub receipt: DurableOutputRef,
+    pub usage: UsageReceipt,
+}
+
+pub(crate) fn graph_generation_committed(
+    job: &JobLedger,
+    attempt: &AttemptRef,
+) -> Result<Option<GraphGenerationCommitted>> {
+    graph_generation_publication::committed_pair(job, attempt)
+}
 
 pub(crate) fn source_relation_plan(
     job: &JobLedger,
@@ -67,6 +82,9 @@ pub(crate) fn validate_job_payloads(
     operation.validate()?;
     if draft.title == "Retain accounted response receipt" && draft.operations.len() == 3 {
         return source_relation_publication::replay(fs, vault, operation, draft);
+    }
+    if draft.title == "Retain accounted response receipt" && draft.operations.len() == 2 {
+        return graph_generation_publication::replay(fs, vault, operation, draft);
     }
     if draft.origin.is_some()
         || draft.inverse_of.is_some()
@@ -314,6 +332,9 @@ pub(crate) fn validate_job_draft(
     job.with(false, |guard, loaded| {
         if draft.title == "Retain accounted response receipt" && draft.operations.len() == 3 {
             return source_relation_publication::validate_locked(job, guard, loaded, draft);
+        }
+        if draft.title == "Retain accounted response receipt" && draft.operations.len() == 2 {
+            return graph_generation_publication::validate_locked(job, guard, loaded, draft);
         }
         let inspection = &loaded.state.inspection;
         let mut records = Vec::new();
@@ -1817,12 +1838,13 @@ pub(crate) fn publish_job_draft(
     if catalog.operation_state()?.is_none() {
         // The global catalog path has the same typed Received authority gate.
         // Canonical-looking relation envelopes alone cannot authorize writes.
-        let draft =
-            if draft.title == "Retain accounted response receipt" && draft.operations.len() == 3 {
-                validate_job_draft(job, draft)?.draft
-            } else {
-                draft
-            };
+        let draft = if draft.title == "Retain accounted response receipt"
+            && matches!(draft.operations.len(), 2 | 3)
+        {
+            validate_job_draft(job, draft)?.draft
+        } else {
+            draft
+        };
         let prepared = ledger::find_or_prepare(&engine, writer, &draft)?;
         engine.apply(writer, &prepared, &CatalogGraphValidator, &catalog)?;
         return Ok(prepared);

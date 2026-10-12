@@ -103,7 +103,25 @@ impl ChangeEngine {
     }
     /// Read-only expected-state validation; does not create a lock or directories.
     pub fn plan(&self, draft: &ChangeDraft) -> Result<ChangePlan> {
-        self.require_binding()?;
+        self.plan_impl(draft, None)
+    }
+    pub(crate) fn plan_with_reader(
+        &self,
+        draft: &ChangeDraft,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<ChangePlan> {
+        self.plan_impl(draft, Some(reader))
+    }
+    fn plan_impl(
+        &self,
+        draft: &ChangeDraft,
+        mut reader: Option<&mut crate::storage::layout::RawReader<'_>>,
+    ) -> Result<ChangePlan> {
+        if let Some(read) = reader.as_mut() {
+            self.require_binding_with_reader(*read)?;
+        } else {
+            self.require_binding()?;
+        }
         let bounded_graph = draft.inverse_of.is_some()
             || draft.origin.as_ref().is_some_and(|origin| {
                 matches!(
@@ -139,7 +157,10 @@ impl ChangeEngine {
         let read_paths: Vec<_> = read_preconditions.iter().map(|r| r.path.clone()).collect();
         validate_targets(&self.fs, &read_paths)?;
         for condition in &read_preconditions {
-            let bytes = read_bounded(&self.fs, &condition.path, MAX_PAYLOAD_BYTES)?;
+            let bytes = match reader.as_mut() {
+                Some(read) => read(&condition.path, MAX_PAYLOAD_BYTES)?,
+                None => read_bounded(&self.fs, &condition.path, MAX_PAYLOAD_BYTES)?,
+            };
             if state(bytes.as_deref()) != condition.expected {
                 return Err(WikiError::new(
                     ErrorCode::ContentConflict,
@@ -160,7 +181,17 @@ impl ChangeEngine {
             usize::MAX
         };
         for operation in operations {
-            let before = read_with_budget(&self.fs, &operation.target, &mut inverse_reads)?;
+            let before = if let Some(read) = reader.as_mut() {
+                let bytes = read(&operation.target, MAX_PAYLOAD_BYTES.min(inverse_reads))?;
+                inverse_reads = inverse_reads
+                    .checked_sub(bytes.as_ref().map_or(0, Vec::len))
+                    .ok_or_else(|| {
+                        WikiError::new(ErrorCode::BudgetExceeded, "managed read budget exhausted")
+                    })?;
+                bytes
+            } else {
+                read_with_budget(&self.fs, &operation.target, &mut inverse_reads)?
+            };
             let actual = state(before.as_deref());
             if operation.expected != actual {
                 return Err(WikiError::new(
@@ -970,7 +1001,7 @@ impl ChangeEngine {
             read_bounded(&self.fs, path, maximum)
         })
     }
-    fn validate_manifest_with_reader(
+    pub(crate) fn validate_manifest_with_reader(
         &self,
         manifest: &ChangeManifest,
         id: &RecordId,
@@ -1147,7 +1178,7 @@ impl ChangeEngine {
         )
     }
     #[allow(clippy::too_many_arguments)]
-    fn verify_payload_with_reader(
+    pub(crate) fn verify_payload_with_reader(
         &self,
         id: &RecordId,
         index: usize,

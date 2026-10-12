@@ -5,6 +5,58 @@ use crate::{
     vault::{ExpectedState, VaultFs, VaultRoot, WriterPermit},
 };
 use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u32)]
+pub enum LayoutKind {
+    Legacy = 1,
+    Retained = 2,
+    ReadableSources = 3,
+}
+impl LayoutKind {
+    pub(crate) fn from_version(version: u32) -> Result<Self> {
+        match version {
+            1 => Ok(Self::Legacy),
+            2 => Ok(Self::Retained),
+            3 => Ok(Self::ReadableSources),
+            _ => Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "unsupported storage layout version",
+            )),
+        }
+    }
+}
+/// Select membership only from the exact base marker in a caller-authenticated
+/// validation input. Proposed markers and display frontmatter grant no exclusion.
+/// Physical discovery separately proves the corresponding activation receipt.
+pub(crate) fn input_layout_kind(input: &crate::changes::ValidationInput) -> Option<LayoutKind> {
+    let mut markers = input
+        .documents
+        .iter()
+        .filter(|document| document.path.as_str() == "WIKI.md");
+    let marker = markers.next()?;
+    if markers.next().is_some() || Blake3Hash::digest(&marker.bytes) != marker.hash {
+        return None;
+    }
+    let record = parse_note(&marker.bytes).canonical?;
+    if record.kind() != RecordKind::Vault || record.id() != &input.vault_id {
+        return None;
+    }
+    match record.string("wiki_schema") {
+        Some("1") => Some(LayoutKind::Legacy),
+        Some("2") => Some(LayoutKind::Retained),
+        Some("3") => Some(LayoutKind::ReadableSources),
+        _ => None,
+    }
+}
+pub(crate) fn presentation_path_excluded(
+    kind: Option<LayoutKind>,
+    path: &VaultRelativePath,
+) -> bool {
+    kind == Some(LayoutKind::ReadableSources)
+        && path
+            .as_str()
+            .starts_with(crate::domain::source_presentation::PRESENTATION_PREFIX)
+}
 pub(crate) const ACTIVE: &str = ".wiki/state/storage/layout.json";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -55,10 +107,11 @@ pub(crate) fn vault_with_reader(reader: &mut RawReader<'_>) -> Result<(RecordId,
     }
     Ok((
         record.id().clone(),
-        if record.string("wiki_schema") == Some("2") {
-            2
-        } else {
-            1
+        match record.string("wiki_schema") {
+            Some("1") => 1,
+            Some("2") => 2,
+            Some("3") => 3,
+            _ => return Err(WikiError::invalid("unsupported vault schema")),
         },
     ))
 }
@@ -67,7 +120,7 @@ pub(crate) fn vault_with_reader(reader: &mut RawReader<'_>) -> Result<(RecordId,
 #[derive(Debug)]
 pub(crate) struct ValidatedLayout {
     root: VaultRoot,
-    retained: bool,
+    kind: LayoutKind,
 }
 impl ValidatedLayout {
     pub(crate) fn capture_with_reader(
@@ -81,10 +134,10 @@ impl ValidatedLayout {
         reader: &mut RawReader<'_>,
         on_step: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Self> {
-        let retained = active_with_reader(root, reader, on_step, false)?;
+        let kind = active_with_reader(root, reader, on_step, false)?;
         Ok(Self {
             root: root.clone(),
-            retained,
+            kind,
         })
     }
     fn require_root(&self, root: &VaultRoot) -> Result<()> {
@@ -101,20 +154,24 @@ impl ValidatedLayout {
         logical: &VaultRelativePath,
     ) -> Result<VaultRelativePath> {
         self.require_root(root)?;
-        Ok(if self.retained {
-            managed_path(logical).unwrap_or_else(|| logical.clone())
-        } else {
-            logical.clone()
-        })
+        Ok(managed_path_for(self.kind, logical).unwrap_or_else(|| logical.clone()))
     }
     pub(crate) fn retained(&self, root: &VaultRoot) -> Result<bool> {
         self.require_root(root)?;
-        Ok(self.retained)
+        Ok(self.kind != LayoutKind::Legacy)
+    }
+    pub(crate) fn kind(&self, root: &VaultRoot) -> Result<LayoutKind> {
+        self.require_root(root)?;
+        Ok(self.kind)
     }
 }
 
 pub fn active(root: &VaultRoot) -> Result<bool> {
-    if let Some(result) = super::maintenance_activation::worker_active(root) {
+    Ok(layout_kind(root)? != LayoutKind::Legacy)
+}
+
+pub fn layout_kind(root: &VaultRoot) -> Result<LayoutKind> {
+    if let Some(result) = super::maintenance_activation::worker_kind(root) {
         return result;
     }
     let result = active_with_reader(
@@ -134,7 +191,7 @@ fn active_with_reader(
     reader: &mut RawReader<'_>,
     on_step: &mut dyn FnMut() -> Result<()>,
     native_reader: bool,
-) -> Result<bool> {
+) -> Result<LayoutKind> {
     if super::maintenance_activation::worker_context_active() {
         return Err(WikiError::new(
             ErrorCode::Internal,
@@ -187,32 +244,41 @@ fn active_with_reader(
                     Err(e) => return Err(WikiError::new(ErrorCode::Internal, e.to_string())),
                 }
             }
-            return Ok(false);
+            return Ok(LayoutKind::Legacy);
         }
-        if vault_with_reader(reader)?.1 == 2
+        if vault_with_reader(reader)?.1 >= 2
             && !super::cleanup::pending_activation_matches_with_reader(reader)?
+            && !super::source_layout::pending_activation_matches_with_reader(reader)?
         {
             return Err(WikiError::new(
                 ErrorCode::RecoveryRequired,
                 "vault format 2 requires retained storage activation; restore the complete vault backup including .wiki",
             ));
         }
-        return Ok(false);
+        return Ok(LayoutKind::Legacy);
     };
     let layout: Layout = decode(&bytes)?;
     let (id, schema) = vault_with_reader(reader)?;
-    if layout.version != 2 || layout.vault_id != id || schema != 2 {
+    let pending_upgrade = layout.version == 2
+        && schema == 3
+        && super::source_layout::pending_activation_matches_with_reader(reader)?;
+    if !matches!(layout.version, 2 | 3)
+        || layout.vault_id != id
+        || schema != layout.version && !pending_upgrade
+    {
         return Err(WikiError::new(
             ErrorCode::RecoveryRequired,
             "storage activation differs from vault format",
         ));
     }
-    if native_reader {
+    if layout.version == 3 {
+        super::source_layout::verify_activation_with_reader(&layout, reader)?;
+    } else if native_reader {
         super::cleanup::verify_activation(root, &layout)?;
     } else {
         super::cleanup::verify_activation_with_reader(&layout, reader)?;
     }
-    Ok(true)
+    LayoutKind::from_version(layout.version)
 }
 pub fn managed_path(path: &VaultRelativePath) -> Option<VaultRelativePath> {
     let s = path.as_str();
@@ -241,14 +307,61 @@ pub fn physical_relative(root: &VaultRoot, path: &VaultRelativePath) -> Result<V
     crate::maintenance_diagnostic::observe(
         crate::maintenance_diagnostic::Phase::RouteConstruction,
         || {
-            if let Some(mapped) = managed_path(path)
-                && active(root)?
+            if (managed_path(path).is_some() || source_managed_path(path).is_some())
+                && let Some(mapped) = managed_path_for(layout_kind(root)?, path)
             {
                 return Ok(mapped);
             }
             Ok(path.clone())
         },
     )
+}
+/// Source mappings are fixed grammar, never caller-supplied path aliases.
+pub(crate) fn source_managed_path(path: &VaultRelativePath) -> Option<VaultRelativePath> {
+    let p: Vec<_> = path.as_str().split('/').collect();
+    if p.first() != Some(&"sources") || p.get(1) == Some(&"views") {
+        return None;
+    }
+    let valid = match p.as_slice() {
+        ["sources"] => false,
+        ["sources", source] => RecordId::new(*source).is_ok(),
+        ["sources", source, "source.md" | "revisions"] => RecordId::new(*source).is_ok(),
+        ["sources", source, "revisions", revision] => {
+            RecordId::new(*source).is_ok() && RecordId::new(*revision).is_ok()
+        }
+        ["sources", source, "revisions", revision, file] => {
+            RecordId::new(*source).is_ok()
+                && RecordId::new(*revision).is_ok()
+                && (*file == "revision.md"
+                    || *file == "content.md"
+                    || file.starts_with("original.") && file.len() > 9)
+        }
+        _ => false,
+    };
+    valid
+        .then(|| VaultRelativePath::new(format!(".wiki/retained/{}", path.as_str())).ok())
+        .flatten()
+}
+pub fn managed_path_for(kind: LayoutKind, path: &VaultRelativePath) -> Option<VaultRelativePath> {
+    match kind {
+        LayoutKind::Legacy => None,
+        LayoutKind::Retained => managed_path(path),
+        LayoutKind::ReadableSources => source_managed_path(path).or_else(|| managed_path(path)),
+    }
+}
+pub(crate) fn logical_path_for(
+    kind: LayoutKind,
+    path: &VaultRelativePath,
+) -> Option<VaultRelativePath> {
+    if kind == LayoutKind::ReadableSources
+        && let Some(tail) = path.as_str().strip_prefix(".wiki/retained/")
+    {
+        let logical = VaultRelativePath::new(tail).ok()?;
+        if managed_path_for(kind, &logical).as_ref() == Some(path) {
+            return Some(logical);
+        }
+    }
+    logical_path(path)
 }
 pub(crate) fn logical_path(path: &VaultRelativePath) -> Option<VaultRelativePath> {
     let s = path.as_str();

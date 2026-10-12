@@ -1,7 +1,7 @@
 //! Ordinary normalized Page replacement rollback/apply; disposable vaults only.
 //! Legacy exact-ID adoption uses the old public staging path; binary-pair
 //! compatibility and crash qualification remain separate gates.
-use super::{OfflineApp, OperationOptions, ReadRequest, RecordSelector, offline::init};
+use super::{OfflineApp, OperationOptions, ReadRequest, RecordSelector};
 use crate::{
     catalog::{
         CatalogGraphValidator, query_types::QueryReadLimits,
@@ -142,7 +142,14 @@ impl Fixture {
     fn new(retained: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("normalized rollback vault with spaces");
-        init(&root, "Normalized rollback", options()).unwrap();
+        // This compatibility fixture deliberately covers legacy storage 1/2.
+        // Ordinary init now creates readable-source storage 3.
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("WIKI.md"),
+            include_bytes!("../../tests/fixtures/bootstrap/vault/WIKI.md"),
+        )
+        .unwrap();
         let vault = VaultFs::new(VaultRoot::explicit(&root).unwrap());
         if retained {
             let writer = WriterPermit::acquire(vault.root(), Duration::ZERO).unwrap();

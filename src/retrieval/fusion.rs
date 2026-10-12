@@ -153,6 +153,7 @@ fn dense_hit_inner(
         identity_eligibility: record.as_ref().and_then(|r| r.identity_eligibility),
         excerpt,
         secondary_excerpts: vec![],
+        declared_source_refs: super::lexical::declared_source_refs(document),
         reasons: vec![RetrievalReason::Semantic],
         rank_contributions: vec![RankContribution {
             channel: "dense".into(),

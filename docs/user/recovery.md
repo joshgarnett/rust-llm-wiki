@@ -26,6 +26,7 @@ not mean every file in the wiki is healthy.
 | A managed name is already in use | Preserve it and choose a new wiki folder, or deliberately rename the conflicting item. |
 | The saved wiki moved or its ID does not match | Check the intended folder with `--wiki PATH wiki show`. After a deliberate move, set the new path with `wiki default set PATH`. |
 | Configuration cannot be read | Fix the reported file. To work without saved settings, use `--no-user-config --wiki PATH`. |
+| A credential helper asks you to sign in | Sign in through that program, then repeat your lwiki command. Keep the saved helper settings. See [command credentials](sources-and-providers.md#optional-remote-providers). |
 | A file changed after you inspected it | Read it again, merge your edit, and use its new hash. |
 | A page has invalid metadata | Keep a copy, inspect the file, and restore a known-good version as described below. |
 | A change was interrupted | Run `recover`, then inspect any reported conflict before resolving it. |
@@ -87,3 +88,15 @@ same wiki ID, so select its location explicitly while testing.
 
 Before `storage cleanup`, make and verify a complete backup. Do not move or
 delete hidden folders by hand.
+
+### Restore the backup made by source migration
+
+`storage migrate` prints its backup location. To restore it, create a separate,
+empty folder. Copy everything inside the backup's `vault/` folder there,
+including hidden files, then copy `marker/WIKI.before` there as `WIKI.md`.
+Both parts are required. Leave the original wiki and backup unchanged.
+
+Use the restored folder's path with the verification commands above. Check your
+pages and their source links before selecting it as your default wiki. If a
+migration was interrupted, repeat `storage migrate` to finish it; do not delete
+its working files manually.

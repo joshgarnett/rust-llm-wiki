@@ -197,6 +197,164 @@ fn existing_notes_folder_needs_intent_and_keeps_editor_bytes() {
     );
 }
 
+const RESUME_TITLE: &str = "My \"stored\" notes α";
+const RESUME_AUTHOR: &[u8] = b"# Author\r\n\r\nKeep my original wording.\r\n";
+const RESUME_EDITOR: &[u8] = b"{\"vimMode\":true,\"spellcheck\":false}\n";
+
+fn interrupt_existing_setup(wiki: &Path, preferences: &Path, args: &Arguments) -> RecordId {
+    fs::create_dir(wiki).unwrap();
+    fs::write(wiki.join("Author.md"), RESUME_AUTHOR).unwrap();
+    fs::create_dir(wiki.join(".obsidian")).unwrap();
+    fs::write(wiki.join(".obsidian/app.json"), RESUME_EDITOR).unwrap();
+    let mut setup = choices(wiki);
+    setup.existing = true;
+    setup.title = Some(RESUME_TITLE.into());
+    let interrupted = crate::app::with_init_checkpoint(
+        Box::new(|name, _| {
+            if name == "bootstrap_published" {
+                Err(WikiError::new(ErrorCode::Internal, "setup interruption"))
+            } else {
+                Ok(())
+            }
+        }),
+        || execute(args, &setup),
+    )
+    .unwrap();
+    assert!(!interrupted.ok);
+    assert_eq!(interrupted.data["completion"], "incomplete");
+    let error = interrupted.error.unwrap();
+    assert_eq!(error.message, "setup interruption");
+    assert_eq!(error.details["initialization"]["published"], false);
+    assert!(!wiki.join("WIKI.md").exists());
+    assert!(!wiki.join(".wiki/state/writer.lock").exists());
+    assert!(!preferences.parent().unwrap().exists());
+    let (id, title) = crate::app::offline::init_bootstrap_identity(wiki, None)
+        .unwrap()
+        .expect("interrupted setup retains its chosen identity");
+    assert_eq!(title, RESUME_TITLE);
+    id
+}
+
+fn setup_tree(root: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+    fn visit(
+        root: &Path,
+        directory: &Path,
+        entries: &mut std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+    ) {
+        for entry in fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let kind = entry.file_type().unwrap();
+            assert!(
+                !kind.is_symlink(),
+                "fixture unexpectedly contains a symlink"
+            );
+            if kind.is_dir() {
+                entries.insert(path.strip_prefix(root).unwrap().to_path_buf(), None);
+                visit(root, &path, entries);
+            } else {
+                assert!(kind.is_file());
+                entries.insert(
+                    path.strip_prefix(root).unwrap().to_path_buf(),
+                    Some(fs::read(&path).unwrap()),
+                );
+            }
+        }
+    }
+    let mut entries = std::collections::BTreeMap::new();
+    visit(root, root, &mut entries);
+    entries
+}
+
+fn assert_setup_resumed(wiki: &Path, preferences: &Path, id: &RecordId) {
+    let identity = crate::vault::discovery::default_from_path(wiki).unwrap();
+    assert_eq!(&identity.wiki_id, id);
+    assert_eq!(
+        config::local::load_user_config(Some(preferences), false)
+            .unwrap()
+            .default_wiki(),
+        Some(&identity)
+    );
+    let marker = crate::records::parse_note(&fs::read(wiki.join("WIKI.md")).unwrap());
+    let record = marker.canonical.unwrap();
+    assert_eq!(record.id(), id);
+    assert_eq!(record.title(), RESUME_TITLE);
+    let root = crate::vault::VaultRoot::explicit(wiki).unwrap();
+    assert_eq!(
+        crate::storage::layout::layout_kind(&root).unwrap(),
+        crate::storage::layout::LayoutKind::ReadableSources
+    );
+    assert_eq!(fs::read(wiki.join("Author.md")).unwrap(), RESUME_AUTHOR);
+    assert_eq!(
+        fs::read(wiki.join(".obsidian/app.json")).unwrap(),
+        RESUME_EDITOR
+    );
+}
+
+#[test]
+fn interrupted_setup_preview_is_pure_and_omitted_title_retry_keeps_identity() {
+    let (temp, wiki, preferences, mut args) = fixture();
+    let id = interrupt_existing_setup(&wiki, &preferences, &args);
+    let before = setup_tree(temp.path());
+    let mut setup = choices(&wiki);
+    setup.existing = true;
+    assert!(setup.title.is_none());
+    args.dry_run = true;
+    let preview = execute(&args, &setup).unwrap();
+    assert!(preview.ok, "{:?}", preview.error);
+    assert_eq!(preview.data["completion"], "preview");
+    assert!(!preview.meta.network_used);
+    assert!(
+        preview.data["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|step| { step["applied"] == false })
+    );
+    assert_eq!(setup_tree(temp.path()), before);
+    args.dry_run = false;
+    let resumed = execute(&args, &setup).unwrap();
+    assert!(resumed.ok, "{:?}", resumed.error);
+    assert_eq!(resumed.data["completion"], "complete");
+    assert_eq!(resumed.meta.wiki_id.as_deref(), Some(id.as_str()));
+    assert!(!resumed.meta.network_used);
+    assert_setup_resumed(&wiki, &preferences, &id);
+}
+
+#[test]
+fn interrupted_setup_interactive_retry_skips_title_question_and_keeps_author_files() {
+    let (temp, wiki, preferences, args) = fixture();
+    let id = interrupt_existing_setup(&wiki, &preferences, &args);
+    let before = setup_tree(temp.path());
+    let setup = SetupArguments {
+        path: Some(wiki.clone()),
+        existing: true,
+        ..Default::default()
+    };
+    let input = b"yes\nskip\nno\nno\n";
+    let mut prompts = Prompts {
+        input: io::Cursor::new(input),
+        output: Vec::new(),
+    };
+    let mut selected = collect(&setup, &args, true, &mut prompts).unwrap();
+    assert!(selected.existing);
+    assert!(!selected.select);
+    assert!(selected.title.is_none());
+    assert!(!selected.no_default);
+    assert!(selected.agent.is_none());
+    assert_eq!(prompts.input.position(), input.len() as u64);
+    let output = String::from_utf8(prompts.output).unwrap();
+    assert!(output.contains(RESUME_TITLE));
+    assert!(!output.contains("Wiki title"));
+    assert_eq!(setup_tree(temp.path()), before);
+    selected.non_interactive = true;
+    let resumed = execute(&args, &selected).unwrap();
+    assert!(resumed.ok, "{:?}", resumed.error);
+    assert_eq!(resumed.data["completion"], "complete");
+    assert!(!resumed.meta.network_used);
+    assert_setup_resumed(&wiki, &preferences, &id);
+}
+
 #[test]
 fn closed_input_without_a_destination_returns_actionable_usage() {
     let (_temp, _wiki, _preferences, args) = fixture();
@@ -1142,7 +1300,7 @@ fn interactive_command_corrects_missing_program_and_shares_auth_only_after_both_
         ..Default::default()
     };
     let input = format!(
-        "skip\ncommand\nmissing-lwiki-helper\n'{}' auth 'two words'\njson\nyes\n",
+        "skip\ncommand\nmissing-lwiki-helper\n'{}' auth 'two words'\njson\nyes\n\n",
         program.display()
     );
     let mut prompts = Prompts {
@@ -1326,4 +1484,26 @@ fn setup_persists_b_provider_without_repointing_default_a_and_rerun_uses_saved_f
         "wiki-b-embedding"
     );
     assert_eq!(fs::read(&a_providers).unwrap(), a_bytes);
+}
+
+#[test]
+fn generation_reasoning_setting_survives_setup_and_returns_to_provider_default() {
+    let (_temp, wiki, _preferences, args) = fixture();
+    let mut setup = choices(&wiki);
+    setup.generation_model = Some("test-generation".into());
+    setup.generation_url = Some("https://generation.example/v1/responses".into());
+    setup.generation_key_env = Some("LWIKI_NEVER_READ_SETUP_REASONING".into());
+    setup.generation_reasoning_effort = Some("high".into());
+    setup.grant_provider = true;
+    let saved = execute(&args, &setup).unwrap();
+    assert!(saved.ok, "{:?}", saved.error);
+    assert_eq!(saved.data["plan"]["generation"]["reasoning_effort"], "high");
+    assert!(!saved.meta.network_used);
+    let rerun = execute(&args, &choices(&wiki)).unwrap();
+    assert!(rerun.ok);
+    assert_eq!(rerun.data["plan"]["generation"]["reasoning_effort"], "high");
+    setup.generation_reasoning_effort = Some("default".into());
+    assert!(execute(&args, &setup).unwrap().ok);
+    let show = super::super::config_show::execute(&args).unwrap();
+    assert!(show.data["provider"]["generation"]["reasoning_effort"].is_null());
 }

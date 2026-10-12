@@ -795,21 +795,33 @@ fn build_draft(view: &SourceView<'_>, validated: &ValidatedResolution) -> Result
     })
 }
 
-fn retained_receipt(
+pub(crate) fn retained_receipt(
     engine: &ChangeEngine,
     view: &SourceView<'_>,
     change: &ChangeInspection,
     task: &RecordId,
 ) -> Result<VerifiedResolutionReceipt> {
+    retained_receipt_with_reader(engine, view, change, task, &mut |p, m| {
+        crate::changes::prepare::read_bounded(engine.fs(), p, m)
+    })
+}
+pub(crate) fn retained_receipt_with_reader(
+    engine: &ChangeEngine,
+    view: &SourceView<'_>,
+    change: &ChangeInspection,
+    task: &RecordId,
+    reader: &mut crate::storage::layout::RawReader<'_>,
+) -> Result<VerifiedResolutionReceipt> {
     let mut writes = vec![];
     for (i, op) in change.manifest.operations.iter().enumerate() {
-        let bytes = engine.verify_payload(
+        let bytes = engine.verify_payload_with_reader(
             &change.manifest.change_id,
             i,
             "proposed",
             &op.target,
-            &op.after,
-            &op.after_payload,
+            (&op.after, &op.after_payload),
+            crate::changes::indexed_refresh::MAX_GRAPH_ENVELOPE_BYTES,
+            reader,
         )?;
         writes.push(ExpectedWrite {
             target: op.target.clone(),

@@ -668,6 +668,20 @@ impl VaultFs {
         if !self.storage_recovery
             && hash_regular_raw_bounded(
                 &self.root,
+                &VaultRelativePath::new(crate::storage::source_layout::PENDING)?,
+                64 * 1024 * 1024,
+                "storage-read",
+            )?
+            .is_some()
+        {
+            return Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "saved-note migration is interrupted; run `lwiki storage migrate` before using this wiki",
+            ));
+        }
+        if !self.storage_recovery
+            && hash_regular_raw_bounded(
+                &self.root,
                 &VaultRelativePath::new(".wiki/state/storage/cleanup.json")?,
                 64 * 1024 * 1024,
                 "storage-read",
@@ -686,6 +700,20 @@ impl VaultFs {
         budget: &crate::catalog::scan::ReadScanBudget,
     ) -> Result<()> {
         budget.check()?;
+        if !self.storage_recovery
+            && budget
+                .read_raw(
+                    self,
+                    &VaultRelativePath::new(crate::storage::source_layout::PENDING)?,
+                    64 * 1024 * 1024,
+                )?
+                .is_some()
+        {
+            return Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "saved-note migration is interrupted; run `lwiki storage migrate` before using this wiki",
+            ));
+        }
         if !self.storage_recovery
             && budget
                 .read_raw(
@@ -880,7 +908,7 @@ impl VaultFs {
                 relative.push('/');
             }
             relative.push_str(part);
-            let path = self.root.resolve(&VaultRelativePath::new(&relative)?)?;
+            let path = self.root.resolve_raw(&VaultRelativePath::new(&relative)?)?;
             match self.io.create_directory(&path) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {}
@@ -967,8 +995,11 @@ impl VaultFs {
         let parent = destination.parent().expect("managed file has parent");
         // Logical operational files can have a managed physical parent different
         // from their visible siblings. Ensure only that contained parent.
-        if crate::storage::layout::managed_path(target).is_some()
-            && crate::storage::layout::active(&self.root)?
+        if crate::storage::layout::managed_path_for(
+            crate::storage::layout::layout_kind(&self.root)?,
+            target,
+        )
+        .is_some()
         {
             let relative = parent
                 .strip_prefix(self.root.path())

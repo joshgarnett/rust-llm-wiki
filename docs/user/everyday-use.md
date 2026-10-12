@@ -98,8 +98,33 @@ check stops the command if the input changed after inspection.
 
 `index sync` picks up edits to wiki pages and other files in the wiki. It does
 not capture a new copy of an edited original. Repeat capture, or refresh explicitly, when you want
-the agent to cite the update. See [collection maintenance](sources-and-providers.md#maintain-imported-sources)
+the agent to cite the update. See [collection maintenance](sources-and-providers.md#update-notes-from-an-advanced-import)
 for imported notes.
+
+## Browse your wiki in Obsidian
+
+Open your wiki folder as an Obsidian vault. Your pages are in `pages/`, and saved
+sources have readable filenames in `sources/views/`. Follow a page's source links
+to read the notes behind it. A citation to an older copy still opens that copy,
+even after you refresh the source.
+
+Edit your pages normally. To change a saved source, edit its original and repeat
+the capture command. The notes in `sources/views/` are maintained by lwiki. If you
+edit one, lwiki preserves your changes and asks you to resolve the conflict before
+replacing it.
+
+New wikis use this arrangement automatically. For a wiki created with an older
+version, close pending editor saves and preview the change:
+
+```sh
+lwiki --offline --dry-run storage migrate
+lwiki --offline storage migrate
+```
+
+Resolve any issues reported by the preview before running the second command.
+Migration keeps your notes and history and creates a backup. Existing Obsidian
+settings stay unchanged. Keep regular [full backups](recovery.md#backup-and-restore),
+including the hidden `.wiki/` folder; editor sync alone is not a full wiki backup.
 
 ## Inspect and edit exact bytes
 

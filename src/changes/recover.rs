@@ -44,15 +44,22 @@ impl ChangeEngine {
                 {
                     pending.push(proof);
                 } else if matches!(state.status, None | Some(ChangeStatus::Prepared)) {
-                    self.validate_manifest(&manifest, &id)?;
-                    if self
-                        .observe(&manifest)?
-                        .iter()
-                        .any(|o| o.observed != o.before)
-                    {
-                        return Err(recovery_error(
-                            "staged indexed proposal has changed targets without applying authority",
-                        ));
+                    if proof.version == 5 {
+                        // A staged graph proposal stays staged. This performs
+                        // bounded filesystem verification, never activation,
+                        // selected SQL projection, or active recovery.
+                        IndexedRefreshSession::check_staged_graph(catalog, &proof)?;
+                    } else {
+                        self.validate_manifest(&manifest, &id)?;
+                        if self
+                            .observe(&manifest)?
+                            .iter()
+                            .any(|o| o.observed != o.before)
+                        {
+                            return Err(recovery_error(
+                                "staged indexed proposal has changed targets without applying authority",
+                            ));
+                        }
                     }
                     report.staged.push(change);
                 } else {

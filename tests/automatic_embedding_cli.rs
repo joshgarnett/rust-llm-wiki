@@ -219,6 +219,16 @@ fn fresh_setup_save_default_hybrid_and_repeated_query_reuse_actual_requests() {
         "{save}"
     );
     assert!(fixture.mock.count() > 0);
+    assert!(
+        save["data"]["automatic_embeddings"]["prepared_inputs"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        save["data"]["automatic_embeddings"]["provider"]["host"],
+        "127.0.0.1"
+    );
     let query = "When is the cedar workshop?";
     let found = fixture.ok(&["search", query]);
     assert!(
@@ -234,6 +244,10 @@ fn fresh_setup_save_default_hybrid_and_repeated_query_reuse_actual_requests() {
         "{found}"
     );
     assert_eq!(found["meta"]["network_used"], true);
+    assert_eq!(
+        found["data"]["automatic_embeddings"]["prepared_inputs"], 0,
+        "a query request must not be reported as newly prepared source text"
+    );
     let sent = fixture.mock.count();
     let repeated = fixture.ok(&["search", query]);
     assert_eq!(fixture.mock.count(), sent);
@@ -443,4 +457,119 @@ fn invalid_default_lookup_is_rejected_before_preparation() {
         assert_ne!(code, 0);
     }
     assert_eq!(fixture.mock.count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn ordinary_search_recovers_after_credential_repair_without_manual_run_commands() {
+    use std::os::unix::fs::PermissionsExt;
+    for normalized in [false, true] {
+        let fixture = Fixture::new(true);
+        let helper = fixture._temp.path().join("recovery-helper");
+        let repaired = fixture._temp.path().join("credentials-ready");
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\n[ -f \"$1\" ] || exit 1\nprintf fixture-key\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let command = format!("'{}' '{}'", helper.display(), repaired.display());
+        fixture.ok(&[
+            "--offline",
+            "config",
+            "set",
+            "embedding",
+            "--credential-command",
+            &command,
+            "--non-interactive",
+        ]);
+        let input = fixture.input(
+            "cedar.md",
+            "# Cedar workshop\nThe cedar workshop starts at 14:30.\n",
+        );
+        fixture.ok(&["--offline", "source", "add", input.to_str().unwrap()]);
+        if normalized {
+            fixture.ok(&["--offline", "index", "rebuild", "--normalized"]);
+        }
+        let mut runs = Vec::new();
+        for _ in 0..2 {
+            let failed = fixture.ok(&["search", "cedar workshop"]);
+            assert_eq!(
+                failed["data"]["automatic_embeddings"]["error"]["code"], "PROVIDER_AUTH",
+                "{failed}"
+            );
+            assert_eq!(
+                failed["data"]["automatic_lookup"]["returned_mode"],
+                "lexical"
+            );
+            assert!(failed["data"].to_string().contains("14:30"));
+            assert_eq!(fixture.mock.count(), 0);
+            runs.extend(
+                failed["data"]["automatic_embeddings"]["observations"]["touched_run_ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|id| id.as_str().unwrap().to_owned()),
+            );
+        }
+        assert!(
+            !runs.is_empty(),
+            "the failure must retain a bootstrapped Run"
+        );
+        std::fs::write(&repaired, "ready").unwrap();
+        let recovered = fixture.ok(&["search", "cedar workshop"]);
+        assert_eq!(
+            recovered["data"]["automatic_embeddings"]["state"], "ready",
+            "{recovered}"
+        );
+        assert!(
+            recovered["data"]["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|hit| {
+                    let channels = hit["rank_contributions"].as_array().unwrap();
+                    channels.iter().any(|rank| rank["channel"] == "dense")
+                        && channels.iter().any(|rank| rank["channel"] == "lexical")
+                }),
+            "{recovered}"
+        );
+        assert!(recovered["data"].to_string().contains("14:30"));
+        assert!(fixture.mock.count() > 0 && fixture.mock.count() <= 2);
+        let sent = fixture.mock.count();
+        let repeated = fixture.ok(&["search", "cedar workshop"]);
+        assert_eq!(fixture.mock.count(), sent, "{repeated}");
+        // Read-only diagnostics after the successful ordinary workflow confirm
+        // retained history. No Run continuation or amendment repaired it.
+        runs.sort();
+        runs.dedup();
+        for run in runs {
+            let status = fixture.ok(&["jobs", "status", "--run", &run]);
+            assert_eq!(status["data"]["state"], "failed", "{status}");
+            let attempts = status["data"]["attempts"].as_array().unwrap();
+            assert!(
+                !attempts.is_empty(),
+                "credential failure must retain its pre-send attempt"
+            );
+            for attempt in attempts {
+                assert_eq!(attempt["phase"], "settled", "{status}");
+                assert_eq!(attempt["billing"], "released_not_sent", "{status}");
+                assert_eq!(attempt["remote_exposure"], "terminal_confirmed", "{status}");
+                assert!(attempt["spool"].is_null());
+                assert!(attempt["receipt"].is_null());
+                assert!(attempt["outputs"].as_array().unwrap().is_empty());
+                assert!(attempt["cache_outputs"].as_array().unwrap().is_empty());
+            }
+            assert_eq!(status["data"]["budget"]["dispatched_requests"], 0);
+            assert_eq!(status["data"]["budget"]["outstanding_requests"], 0);
+            assert_eq!(status["data"]["budget"]["settled"]["requests"], 0);
+            assert_eq!(status["data"]["budget"]["guarantee_intact"], true);
+            assert!(
+                status["data"]["budget"]["unknown_attempts"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
 }

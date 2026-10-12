@@ -69,6 +69,8 @@ enum Contract {
         instruction_role: InstructionRole,
         output_limit_field: OutputLimitField,
         response_mode: ResponseMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<crate::config::providers::ReasoningEffort>,
         total_generated_token_limit: u64,
         schema_fingerprint: Blake3Hash,
         schema: serde_json::Value,
@@ -215,6 +217,7 @@ impl Contract {
                 instruction_role: c.instruction_role,
                 output_limit_field: c.output_limit_field,
                 response_mode: c.response_mode,
+                reasoning_effort: c.reasoning_effort,
                 total_generated_token_limit: c.total_generated_token_limit,
                 schema_fingerprint: c.schema_fingerprint.clone(),
                 schema: c.schema.as_ref().clone(),
@@ -307,6 +310,7 @@ impl Contract {
                     instruction_role,
                     output_limit_field,
                     response_mode,
+                    reasoning_effort,
                     total_generated_token_limit,
                     schema_fingerprint,
                     schema,
@@ -319,12 +323,13 @@ impl Contract {
                 },
             ) if role == ServiceRole::Generate => {
                 let basis = basis.restore(bound, role)?;
-                if (surface == GenerationSurface::Responses
-                    && !matches!(
-                        basis,
-                        BoundBasis::UnknownCompatible
-                            | BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1
-                    ))
+                if (reasoning_effort.is_some() && !matches!(basis, BoundBasis::UnknownCompatible))
+                    || (surface == GenerationSurface::Responses
+                        && !matches!(
+                            basis,
+                            BoundBasis::UnknownCompatible
+                                | BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1
+                        ))
                     || (matches!(basis, BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1)
                         && (surface != GenerationSurface::Responses || *max_output_tokens > 32768))
                     || &schema != output_schema
@@ -369,6 +374,7 @@ impl Contract {
                     instruction_role,
                     output_limit_field,
                     response_mode,
+                    reasoning_effort,
                     total_generated_token_limit,
                     schema_fingerprint,
                     schema: Arc::new(schema),
@@ -588,4 +594,106 @@ pub(super) fn restore_bounded(
         input,
         contract,
     })
+}
+
+#[cfg(test)]
+mod reasoning_tests {
+    use super::*;
+    use crate::providers::wire_tests::common::*;
+    use serde_json::json;
+
+    #[test]
+    fn reasoning_history_roundtrips_and_rejects_forged_known_basis() {
+        for (adapter, model, endpoint) in [
+            (
+                "responses-v1",
+                "gpt-4.1-mini-2025-04-14",
+                "https://api.openai.com/v1/responses",
+            ),
+            (
+                "chat-completions-v1",
+                "gpt-4.1-2025-04-14",
+                "https://api.openai.com/v1/chat/completions",
+            ),
+        ] {
+            let input = RemoteInput {
+                version: 1,
+                operation: RemoteOperation::Generate {
+                    instructions: "Return JSON".into(),
+                    data: "data".into(),
+                    output_schema: json!({"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}),
+                    max_output_tokens: 16,
+                },
+            };
+            for extra in [
+                "",
+                "reasoning_effort=\"none\"\n",
+                "reasoning_effort=\"low\"\n",
+            ] {
+                let c = case_with_adapter(
+                    ServiceRole::Generate,
+                    input.clone(),
+                    model,
+                    endpoint,
+                    extra,
+                    |_| {},
+                    adapter,
+                );
+                let prepared = generation_wire::prepare(
+                    &c.trusted,
+                    &c.spec.tasks[0],
+                    &input,
+                    DispatchPurpose::Task,
+                )
+                .unwrap();
+                let captured = Contract::capture(&prepared.contract).unwrap();
+                let bytes = serde_json::to_vec(&captured).unwrap();
+                let mut stored: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                if extra.is_empty() {
+                    assert!(stored.get("reasoning_effort").is_none());
+                    let decoded: Contract = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(serde_json::to_vec(&decoded).unwrap(), bytes);
+                }
+                let restored = captured
+                    .restore(&input, &prepared.bound, ServiceRole::Generate)
+                    .unwrap();
+                let WireContract::Generation(contract) = restored else {
+                    panic!("generation contract")
+                };
+                assert_eq!(
+                    contract.reasoning_effort,
+                    c.trusted.service().reasoning_effort
+                );
+                if !extra.is_empty() {
+                    // A stored known basis with explicit effort cannot regain a monetary guarantee.
+                    let omitted = case_with_adapter(
+                        ServiceRole::Generate,
+                        input.clone(),
+                        model,
+                        endpoint,
+                        "",
+                        |_| {},
+                        adapter,
+                    );
+                    let known = generation_wire::prepare(
+                        &omitted.trusted,
+                        &omitted.spec.tasks[0],
+                        &input,
+                        DispatchPurpose::Task,
+                    )
+                    .unwrap();
+                    stored["basis"] =
+                        serde_json::to_value(Contract::capture(&known.contract).unwrap()).unwrap()
+                            ["basis"]
+                            .clone();
+                    let forged: Contract = serde_json::from_value(stored).unwrap();
+                    assert!(
+                        forged
+                            .restore(&input, &known.bound, ServiceRole::Generate)
+                            .is_err()
+                    );
+                }
+            }
+        }
+    }
 }

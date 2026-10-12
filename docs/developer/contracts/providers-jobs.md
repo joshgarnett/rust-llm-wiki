@@ -293,6 +293,21 @@ Run these against mocks and fault-injected storage first; add opt-in live contra
 
 ### Probe allowance and gateway headers
 
+Generation services may set `reasoning_effort` to `none`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, or `max`. Support depends on the selected provider and
+model. Omission sends no effort field and preserves the pre-existing service
+fingerprint. Responses sends `reasoning.effort`; Chat Completions sends
+`reasoning_effort`. The sealed task contract and retained history include an
+explicit setting. CLI `default` removes the setting; it differs from explicit
+`none`. Changing effort requires the same reviewed generation permission as other
+generation settings and does not grant automatic embedding permission.
+
+The pinned nonreasoning monetary bounds apply only when effort is omitted. Any
+explicit effort, including `none`, uses unknown compatible-provider bounds.
+Restoring or sealing a known bound with an explicit effort is invalid. Observed
+reasoning usage remains distinct from visible output; failed or incomplete output
+does not erase paid attempts or unknown charges.
+
 Explicit generation probes use the configured service output cap (4096 tokens when omitted), reduced by any caller output-unit or reasoning-unit ceiling. A zero allowance refuses before dispatch. Incomplete output identifies the cap and an explicit bounded retry; it never raises a limit automatically. Unproven gateway token/cost ceilings still fail admission rather than promising unsupported hard guarantees; request/byte ceilings remain available. Responses and Chat use the configured adapter for probes.
 
 Response header names follow RFC 9110 token syntax, including underscores, while count/byte/name/value-control limits remain enforced. Invalid headers report `response_headers_invalid`; oversized bodies report `response_bound`. [RFC 9110 §5.6.2](https://www.rfc-editor.org/rfc/rfc9110.html#name-tokens)

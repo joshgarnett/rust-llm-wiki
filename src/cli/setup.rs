@@ -119,6 +119,9 @@ pub struct SetupArguments {
     /// Maximum output tokens for the generation model; omitted settings are kept.
     #[arg(long)]
     pub generation_max_output_tokens: Option<u64>,
+    /// Optional generation reasoning effort; default removes the setting, omission keeps it.
+    #[arg(long, value_parser = ["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"])]
+    pub generation_reasoning_effort: Option<String>,
     /// Reuse the embedding credentials after reviewing both destinations.
     #[arg(long, conflicts_with_all = ["generation_key_env", "generation_key_file", "generation_prompt_key", "generation_credential_command"])]
     pub generation_reuse_auth: bool,
@@ -362,6 +365,15 @@ pub(super) fn present_providers(summary: &Value, output: &mut impl Write) -> io:
                 role["dimensions"].as_str().unwrap_or("provider default")
             )?;
         }
+        if name == "generation" {
+            writeln!(
+                output,
+                "Reasoning effort: {}",
+                role["reasoning_effort"]
+                    .as_str()
+                    .unwrap_or("Provider default")
+            )?;
+        }
         if let Some(limit) = role["effective_output_token_limit"].as_u64() {
             writeln!(output, "Maximum output tokens: {limit}")?;
         }
@@ -599,9 +611,10 @@ fn validate_folder(setup: &SetupArguments, args: &Arguments) -> Result<(DefaultW
                 "a new wiki has no existing ID to check; omit --expect-wiki-id or use --select",
             ));
         }
-        let preview = crate::app::offline::init_with_existing(
+        let preview = crate::app::offline::init_with_title_intent(
             path,
-            setup.title.as_deref().unwrap_or("My wiki"),
+            setup.title.as_deref(),
+            "My wiki",
             setup.existing,
             OperationOptions {
                 dry_run: true,
@@ -691,7 +704,16 @@ fn collect_loaded<R: BufRead, W: Write>(
             }
         }
         choices.select = false;
-        if choices.title.is_none() {
+        let bootstrap =
+            crate::app::offline::init_bootstrap_identity(&path, choices.title.as_deref())?;
+        if let Some((_, title)) = bootstrap {
+            writeln!(
+                prompts.output,
+                "Finish setting up {}.",
+                super::dispatch::terminal_text(&title, false)
+            )
+            .map_err(|error| usage(error.to_string()))?;
+        } else if choices.title.is_none() {
             choices.title = Some(prompts.text("Wiki title", Some("My wiki"))?);
         }
     }
@@ -879,6 +901,25 @@ fn collect_loaded<R: BufRead, W: Write>(
             if !choices.generation_reuse_auth {
                 collect_auth(&mut choices, true, generation_current.is_some(), prompts)?;
             }
+            if choices.generation_reasoning_effort.is_none() {
+                loop {
+                    let value = prompts.text(
+                        "Reasoning effort (default/none/minimal/low/medium/high/xhigh/max; empty keeps current or provider default)",
+                        None,
+                    )?;
+                    if value.is_empty() {
+                        break;
+                    }
+                    match reasoning_effort(&value) {
+                        Ok(_) => {
+                            choices.generation_reasoning_effort = Some(value);
+                            break;
+                        }
+                        Err(error) => writeln!(prompts.output, "{}", error.message)
+                            .map_err(|error| usage(error.to_string()))?,
+                    }
+                }
+            }
         }
     }
     Ok((choices, loaded))
@@ -908,6 +949,7 @@ fn generation_requested(choices: &SetupArguments) -> bool {
         || choices.generation_url.is_some()
         || choices.generation_adapter.is_some()
         || choices.generation_max_output_tokens.is_some()
+        || choices.generation_reasoning_effort.is_some()
         || generation_auth_supplied(choices)
 }
 
@@ -1218,6 +1260,7 @@ fn clear_provider_choices(choices: &mut SetupArguments) {
     choices.generation_url = None;
     choices.generation_adapter = None;
     choices.generation_max_output_tokens = None;
+    choices.generation_reasoning_effort = None;
     choices.generation_key_env = None;
     choices.generation_key_file = None;
     choices.generation_prompt_key = false;
@@ -1330,6 +1373,10 @@ fn retry_command_profile(
         ("--key-env", &setup.key_env),
         ("--generation-model", &setup.generation_model),
         ("--generation-adapter", &setup.generation_adapter),
+        (
+            "--generation-reasoning-effort",
+            &setup.generation_reasoning_effort,
+        ),
         ("--generation-key-env", &setup.generation_key_env),
         (
             "--embedding-document-prefix",
@@ -1631,6 +1678,11 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
                 .map(adapter)
                 .transpose()?;
             patch.max_output_tokens = choices.generation_max_output_tokens;
+            patch.reasoning_effort = choices
+                .generation_reasoning_effort
+                .as_deref()
+                .map(reasoning_effort)
+                .transpose()?;
             patch.auth = collect_setup_auth(&mut choices, true, parent, &mut credential_snapshots)?;
             patches.push(patch);
         }
@@ -1919,9 +1971,10 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
     drop(prompts);
     let result: Result<()> = (|| {
         if !marker_exists && !choices.select {
-            let outcome = crate::app::offline::init_with_existing(
+            let outcome = crate::app::offline::init_with_title_intent(
                 &wiki.path,
-                choices.title.as_deref().unwrap_or("My wiki"),
+                choices.title.as_deref(),
+                "My wiki",
                 choices.existing,
                 OperationOptions {
                     dry_run: false,
@@ -2228,6 +2281,26 @@ pub(crate) fn present_report(envelope: &Envelope, output: &mut impl Write) -> io
         writeln!(output, "{warning}")?;
     }
     Ok(())
+}
+
+/// CLI-only `default` removes the key; `none` remains an explicit wire setting.
+pub(super) fn reasoning_effort(value: &str) -> Result<Option<config::providers::ReasoningEffort>> {
+    use config::providers::ReasoningEffort;
+    Ok(match value {
+        "default" => None,
+        "none" => Some(ReasoningEffort::None),
+        "minimal" => Some(ReasoningEffort::Minimal),
+        "low" => Some(ReasoningEffort::Low),
+        "medium" => Some(ReasoningEffort::Medium),
+        "high" => Some(ReasoningEffort::High),
+        "xhigh" => Some(ReasoningEffort::Xhigh),
+        "max" => Some(ReasoningEffort::Max),
+        _ => {
+            return Err(usage(
+                "choose reasoning effort default, none, minimal, low, medium, high, xhigh or max",
+            ));
+        }
+    })
 }
 
 #[cfg(test)]

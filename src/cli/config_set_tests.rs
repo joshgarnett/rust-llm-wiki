@@ -122,6 +122,7 @@ fn choices(role: ProviderRoleArgument) -> ProviderSetArguments {
         adapter: None,
         dimensions: None,
         max_output_tokens: None,
+        reasoning_effort: None,
         key_env: None,
         key_file: None,
         credential_command: None,
@@ -219,10 +220,10 @@ fn automatic_choice_does_not_authorize_an_unbound_generation_model() {
 
 #[cfg(unix)]
 #[test]
-fn generation_cap_and_credentials_keep_automatic_permission_without_running_embedding_helper() {
+fn generation_edits_keep_automatic_permission_without_running_embedding_helper() {
     use std::os::unix::fs::PermissionsExt;
 
-    for edit in ["cap", "credentials"] {
+    for edit in ["cap", "credentials", "effort"] {
         let mut fixture = fixture();
         let program = fixture.wiki.path.parent().unwrap().join("embedding helper");
         let sentinel = program.with_file_name("embedding helper ran");
@@ -258,6 +259,8 @@ fn generation_cap_and_credentials_keep_automatic_permission_without_running_embe
         generation.grant_provider = true;
         if edit == "cap" {
             generation.max_output_tokens = Some(2048);
+        } else if edit == "effort" {
+            generation.reasoning_effort = Some("low".into());
         } else {
             generation.key_env = Some("LWIKI_UNREAD_UPDATED_GENERATION_KEY".into());
         }
@@ -956,4 +959,86 @@ fn explicit_already_effective_global_file_does_not_add_a_redundant_wiki_path() {
             .providers_config
             .is_none()
     );
+}
+
+#[test]
+fn reasoning_edit_preview_save_show_rerun_and_default_are_scoped() {
+    let mut fixture = fixture();
+    let mut settings = choices(ProviderRoleArgument::Generation);
+    settings.reasoning_effort = Some("low".into());
+    fixture.args.dry_run = true;
+    let preview = execute(&fixture.args, &settings).unwrap();
+    assert!(preview.ok, "{:?}", preview.error);
+    assert_eq!(
+        preview.data["providers"]["generation"]["reasoning_effort"],
+        "low"
+    );
+    assert_eq!(fs::read(&fixture.providers).unwrap(), fixture.original);
+    fixture.args.dry_run = false;
+    assert_eq!(
+        execute(&fixture.args, &settings).unwrap_err().code,
+        ErrorCode::Usage
+    );
+    assert_eq!(fs::read(&fixture.providers).unwrap(), fixture.original);
+    settings.grant_provider = true;
+    let saved = execute(&fixture.args, &settings).unwrap();
+    assert!(saved.ok, "{:?}", saved.error);
+    assert!(!saved.meta.network_used);
+    assert_eq!(
+        saved.data["providers"]["embedding"]["model"],
+        "old-embedding"
+    );
+    let show = super::super::config_show::execute(&fixture.args).unwrap();
+    assert_eq!(
+        show.data["provider"]["generation"]["reasoning_effort"],
+        "low"
+    );
+    let setup = super::super::setup::SetupArguments {
+        path: Some(fixture.wiki.path.clone()),
+        non_interactive: true,
+        ..Default::default()
+    };
+    let rerun = super::super::setup::execute(&fixture.args, &setup).unwrap();
+    assert!(rerun.ok);
+    assert_eq!(rerun.data["plan"]["generation"]["reasoning_effort"], "low");
+    settings.reasoning_effort = Some("none".into());
+    assert!(execute(&fixture.args, &settings).unwrap().ok);
+    settings.reasoning_effort = Some("default".into());
+    assert!(execute(&fixture.args, &settings).unwrap().ok);
+    let document = read(&fixture.providers);
+    let profile = selected_profile(&fixture);
+    let service = document["profiles"][profile.as_str()]["generation"]
+        .as_str()
+        .unwrap();
+    assert!(
+        !document["services"][service]
+            .as_table()
+            .unwrap()
+            .contains_key("reasoning_effort")
+    );
+    settings.role = ProviderRoleArgument::Embedding;
+    assert!(patch(&settings).is_err());
+}
+
+#[test]
+fn interactive_generation_effort_default_is_not_explicit_none() {
+    for (value, expected) in [
+        ("default", None),
+        (
+            "none",
+            Some(crate::config::providers::ReasoningEffort::None),
+        ),
+        (
+            "high",
+            Some(crate::config::providers::ReasoningEffort::High),
+        ),
+    ] {
+        let settings = choices(ProviderRoleArgument::Generation);
+        let mut prompts = Prompts {
+            input: io::Cursor::new(format!("reasoning-effort\n{value}\n").into_bytes()),
+            output: Vec::new(),
+        };
+        let result = collect(&settings, true, &mut prompts).unwrap();
+        assert_eq!(patch(&result).unwrap().reasoning_effort, Some(expected));
+    }
 }

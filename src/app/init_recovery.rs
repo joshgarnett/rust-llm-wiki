@@ -5,7 +5,7 @@
 //! No interrupted staging directory is adopted or recursively removed.
 use crate::{
     domain::{ErrorCode, RecordId, Result, VaultRelativePath, WikiError},
-    vault::{DirectorySync, DurableIo, ExpectedState, NativeIo, VaultFs, VaultRoot, WriterPermit},
+    vault::{DirectorySync, DurableIo, NativeIo, VaultFs, VaultRoot, WriterPermit},
 };
 use std::{fs, fs::File, io::Read, path::Path, time::Duration};
 
@@ -20,6 +20,8 @@ pub(crate) fn verify_init_durability(path: &Path) -> Result<()> {
     {
         use std::io::Seek;
         let root = VaultRoot::explicit(path)?;
+        crate::storage::layout::layout_kind(&root)?;
+        VaultFs::new(root.clone()).require_storage_ready()?;
         let root_path = root.path();
         let parent_path = root_path.parent().unwrap_or(root_path);
         let marker_path = root_path.join("WIKI.md");
@@ -115,6 +117,7 @@ pub(super) fn initialize(
     existing: bool,
     directories: &[&str],
     timeout_ms: u64,
+    resuming: bool,
 ) -> Result<()> {
     let parent = destination.parent().unwrap_or(destination);
     let working = if existing {
@@ -135,8 +138,30 @@ pub(super) fn initialize(
             checkpoint("root_created", &working)?;
         }
         let root = VaultRoot::for_initialization(&working)?;
-        let target = root.resolve(&VaultRelativePath::new("WIKI.md")?)?;
-        let stage = working.join(format!(".lwiki-marker-{}.tmp", id.as_str()));
+        #[cfg(unix)]
+        let held_root = File::open(&working).map_err(|e| io("hold initialization root", e))?;
+        let (marker, authority) = if resuming {
+            (marker.to_vec(), Vec::new())
+        } else {
+            crate::storage::source_layout::bootstrap_files(marker)?
+        };
+        let marker = marker.as_slice();
+        let target = root.resolve_raw(&VaultRelativePath::new("WIKI.md")?)?;
+        state_started = true;
+        if !resuming {
+            root.validate_portable_paths(&[
+                VaultRelativePath::new("WIKI.md")?,
+                VaultRelativePath::new(".wiki")?,
+            ])?;
+            stage_bootstrap_authority(&working, &authority, &mut retained)?;
+            retained.push(working.join(".wiki"));
+        }
+        state_started = true;
+        #[cfg(unix)]
+        let held_authority =
+            File::open(working.join(".wiki")).map_err(|e| io("hold bootstrap authority", e))?;
+        checkpoint("bootstrap_published", &working)?;
+        let stage = working.join(format!(".lwiki-marker-{}.tmp", uuid::Uuid::now_v7()));
         let mut file = NativeIo
             .create_private_stage(&stage)
             .map_err(|e| io("create wiki marker stage", e))?;
@@ -163,7 +188,30 @@ pub(super) fn initialize(
             ));
         }
         same_file(&file, &stage)?;
-        root.validate_portable_paths(&[VaultRelativePath::new("WIKI.md")?])?;
+        // Complete ownership and exact marker bytes are checked again after
+        // staging. The winner of .wiki publication alone chooses the marker.
+        if crate::storage::source_layout::resume_bootstrap_marker(&root, None)?.as_deref()
+            != Some(marker)
+        {
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "initialization authority changed before marker publication",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            same_directory(&held_root, &working)?;
+            same_directory(&held_authority, &working.join(".wiki"))?;
+        }
+        sync_bootstrap_authority(&working)?;
+        if crate::storage::source_layout::resume_bootstrap_marker(&root, None)?.as_deref()
+            != Some(marker)
+        {
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "initialization authority changed while syncing",
+            ));
+        }
         // A hard link gives atomic absent-only publication on every supported
         // filesystem. An editor's concurrently created marker is never replaced.
         fs::hard_link(&stage, &target).map_err(|e| io("publish wiki marker", e))?;
@@ -174,19 +222,13 @@ pub(super) fn initialize(
             .sync_directory(&working)
             .map_err(|e| io("sync published wiki marker", e))?;
         durable = existing && marker_sync == DirectorySync::Supported;
+        crate::changes::journal::require_sync(marker_sync)?;
         checkpoint("marker_synced", &working)?;
         // Never unlink a substituted stage name. The held inode remains the
         // authority even after the marker adds a second link to that inode.
         same_file(&file, &stage)?;
         fs::remove_file(&stage).map_err(|e| io("remove published marker stage", e))?;
         let handle = VaultFs::new(root.clone());
-        // Only create absent names. A recognizable name alone never establishes
-        // ownership of an editor's directory that appeared after preflight.
-        NativeIo
-            .create_private_directory(&working.join(".wiki"))
-            .map_err(|e| io("create wiki working folder", e))?;
-        retained.push(working.join(".wiki"));
-        state_started = true;
         let writer = WriterPermit::acquire(&root, Duration::from_millis(timeout_ms))?;
         let knowledge = working.join("knowledge");
         NativeIo
@@ -200,6 +242,17 @@ pub(super) fn initialize(
             let relative = VaultRelativePath::new(*directory)?;
             root.validate_portable_paths(std::slice::from_ref(&relative))?;
             let path = root.resolve(&relative)?;
+            let parent = path
+                .parent()
+                .ok_or_else(|| WikiError::invalid("initialization directory parent missing"))?;
+            if !parent.is_dir() {
+                let relative_parent = parent
+                    .strip_prefix(root.path())
+                    .map_err(|_| WikiError::invalid("initialization directory escaped root"))?
+                    .to_str()
+                    .ok_or_else(|| WikiError::invalid("initialization parent is not UTF-8"))?;
+                handle.ensure_directory(&VaultRelativePath::new(relative_parent)?, &writer)?;
+            }
             NativeIo
                 .create_directory(&path)
                 .map_err(|e| io("create wiki folder", e))?;
@@ -207,10 +260,6 @@ pub(super) fn initialize(
             handle.ensure_directory(&relative, &writer)?;
             checkpoint("managed_directory", &working)?;
         }
-        let ignore = VaultRelativePath::new(".wiki/.gitignore")?;
-        let stage = handle.stage(&ignore, b"cache/\n", &writer)?;
-        handle.replace(stage, &ExpectedState::Absent, &writer)?;
-        retained.push(working.join(".wiki/.gitignore"));
         drop(writer);
         checkpoint("layout_complete", &working)?;
         if !existing {
@@ -228,10 +277,11 @@ pub(super) fn initialize(
             }
             published = true;
             checkpoint("root_published", destination)?;
-            durable = NativeIo
+            let root_sync = NativeIo
                 .sync_directory(parent)
-                .map_err(|e| io("sync published wiki parent", e))?
-                == DirectorySync::Supported;
+                .map_err(|e| io("sync published wiki parent", e))?;
+            durable = root_sync == DirectorySync::Supported;
+            crate::changes::journal::require_sync(root_sync)?;
         }
         Ok(())
     })();
@@ -263,6 +313,109 @@ pub(super) fn initialize(
         });
         error
     })
+}
+
+fn stage_bootstrap_authority(
+    root: &Path,
+    files: &[(VaultRelativePath, Vec<u8>)],
+    retained: &mut Vec<std::path::PathBuf>,
+) -> Result<()> {
+    let stage = root.join(format!(".lwiki-state-{}", uuid::Uuid::now_v7()));
+    NativeIo
+        .create_private_directory(&stage)
+        .map_err(|e| io("create bootstrap stage", e))?;
+    retained.push(stage.clone());
+    for directory in ["state", "state/storage", "state/storage/receipts"] {
+        NativeIo
+            .create_private_directory(&stage.join(directory))
+            .map_err(|e| io("create bootstrap directory", e))?;
+    }
+    for (path, bytes) in files
+        .iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+        .chain(std::iter::once((
+            ".wiki/.gitignore",
+            b"cache/\n".as_slice(),
+        )))
+    {
+        let path = stage.join(
+            path.strip_prefix(".wiki/")
+                .ok_or_else(|| WikiError::invalid("bootstrap path is not private state"))?,
+        );
+        let mut file = NativeIo
+            .create_private_stage(&path)
+            .map_err(|e| io("create bootstrap file", e))?;
+        NativeIo
+            .write_stage(&mut file, bytes)
+            .map_err(|e| io("write bootstrap file", e))?;
+        NativeIo
+            .sync_file(&file)
+            .map_err(|e| io("sync bootstrap file", e))?;
+    }
+    for directory in ["state/storage/receipts", "state/storage", "state", ""] {
+        crate::changes::journal::require_sync(
+            NativeIo
+                .sync_directory(&stage.join(directory))
+                .map_err(|e| io("sync bootstrap directory", e))?,
+        )?;
+    }
+    checkpoint("bootstrap_staged", root)?;
+    publish_directory(&stage, &root.join(".wiki"))?;
+    checkpoint("bootstrap_installed", root)?;
+    crate::changes::journal::require_sync(
+        NativeIo
+            .sync_directory(root)
+            .map_err(|e| io("sync bootstrap publication", e))?,
+    )?;
+    Ok(())
+}
+
+fn sync_bootstrap_authority(root: &Path) -> Result<()> {
+    // The fixed, fully validated bootstrap namespace is tiny. Sync it again on
+    // retry, including a previous rename whose parent sync was interrupted.
+    let mut directories = vec![root.join(".wiki")];
+    let mut at = 0;
+    let mut entries_seen = 0;
+    while at < directories.len() {
+        for entry in fs::read_dir(&directories[at]).map_err(|e| io("read bootstrap for sync", e))? {
+            let entry = entry.map_err(|e| io("read bootstrap entry for sync", e))?;
+            entries_seen += 1;
+            if entries_seen > 16 {
+                return Err(WikiError::invalid("bootstrap changed during sync"));
+            }
+            let kind = entry
+                .file_type()
+                .map_err(|e| io("inspect bootstrap for sync", e))?;
+            if kind.is_dir() {
+                directories.push(entry.path());
+            } else if kind.is_file() {
+                let file =
+                    File::open(entry.path()).map_err(|e| io("open bootstrap for sync", e))?;
+                same_file(&file, &entry.path())?;
+                NativeIo
+                    .sync_file(&file)
+                    .map_err(|e| io("sync bootstrap authority", e))?;
+                same_file(&file, &entry.path())?;
+            } else {
+                return Err(WikiError::invalid("bootstrap contains a nonregular entry"));
+            }
+        }
+        at += 1;
+        if directories.len() > 4 {
+            return Err(WikiError::invalid(
+                "bootstrap directory changed during sync",
+            ));
+        }
+    }
+    let root = root.to_path_buf();
+    for directory in directories.iter().rev().chain(std::iter::once(&root)) {
+        crate::changes::journal::require_sync(
+            NativeIo
+                .sync_directory(directory)
+                .map_err(|e| io("sync bootstrap authority directory", e))?,
+        )?;
+    }
+    Ok(())
 }
 
 fn same_file(file: &File, path: &Path) -> Result<()> {
@@ -342,7 +495,7 @@ type Checkpoint = Box<dyn Fn(&str, &Path) -> Result<()>>;
 #[cfg(test)]
 thread_local! { static CHECKPOINT: std::cell::RefCell<Option<Checkpoint>> = const { std::cell::RefCell::new(None) }; }
 #[cfg(test)]
-pub(super) fn with_checkpoint<T>(hook: Checkpoint, operation: impl FnOnce() -> T) -> T {
+pub(crate) fn with_checkpoint<T>(hook: Checkpoint, operation: impl FnOnce() -> T) -> T {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
@@ -366,3 +519,7 @@ fn checkpoint(name: &str, path: &Path) -> Result<()> {
     let _ = (name, path);
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "init_recovery_tests.rs"]
+mod tests;

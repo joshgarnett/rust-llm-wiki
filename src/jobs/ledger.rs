@@ -67,7 +67,132 @@ fn attempt<'a>(loaded: &'a Loaded, r: &AttemptRef) -> Result<&'a AttemptInspecti
         .find(|a| &a.attempt == r)
         .ok_or_else(|| events::corrupt("attempt identity differs from stored history"))
 }
+
+fn unstarted_embedding(loaded: &Loaded, expected: &RunSpec) -> bool {
+    let inspected = &loaded.state.inspection;
+    let closed = loaded
+        .frames
+        .iter()
+        .rev()
+        .find_map(|frame| match &frame.event.payload {
+            EventPayload::RunTransition { to, reason, .. } => Some(
+                *to == RunState::Failed
+                    && *reason == StopReason::Failed("automatic_no_dispatch".into()),
+            ),
+            _ => None,
+        })
+        == Some(true);
+    inspected.spec == *expected
+        && matches!(expected.scope.operation.as_str(), "embeddings_sync" | "embeddings_query")
+        && inspected.budget.guarantee_intact
+        && loaded.state.sent.is_empty()
+        && inspected.attempts.iter().all(|attempt| {
+            attempt.phase == AttemptPhase::Settled
+                && attempt.billing == BillingDisposition::ReleasedNotSent
+                && attempt.remote_exposure == RemoteExposure::TerminalConfirmed
+                && attempt.spool.is_none() && attempt.receipt.is_none()
+                && attempt.outputs.is_empty() && attempt.cache_outputs.is_empty()
+                && loaded.frames.iter().any(|frame| matches!(&frame.event.payload,
+                    EventPayload::ReleasedNotSent { attempt: released,
+                        reason: NotSentReason::TransportNotEntered | NotSentReason::CredentialsUnavailable }
+                    if released == &attempt.attempt))
+        })
+        && inspected.budget.outstanding == budgets::zero()
+        && inspected.budget.settled == budgets::zero()
+        && inspected.budget.unknown_attempts.is_empty()
+        && inspected.budget.persistence_reserved.journal_bytes == 0
+        && inspected.budget.persistence_reserved.event_slots == 0
+        && inspected.tasks.len() == expected.tasks.len()
+        && expected.tasks.iter().all(|task| inspected.tasks.get(&task.key).is_some_and(|actual| {
+            actual.spec == *task && actual.state == TaskState::Pending
+                && actual.outputs.is_empty() && actual.cache_outputs.is_empty()
+        }))
+        && (matches!(inspected.state, RunState::Planned | RunState::Running | RunState::Paused)
+            || inspected.state == RunState::Failed && closed)
+        && loaded.frames.iter().all(|frame| match &frame.event.payload {
+            EventPayload::RunTransition { to: RunState::Stopped, .. } => false,
+            EventPayload::RunTransition { reason: StopReason::User(_) | StopReason::Cancelled, .. } => false,
+            EventPayload::RunTransition { to: RunState::Paused, reason, .. } => matches!(
+                reason, StopReason::Budget | StopReason::Deadline | StopReason::ReconciliationRequired
+            ),
+            EventPayload::SendAuthorized { .. } | EventPayload::Received { .. }
+                | EventPayload::OutputsCommitted { .. } | EventPayload::OutcomeUnknown { .. } => false,
+            _ => true,
+        })
+}
+
+fn unstarted_embedding_without_spool(
+    guard: &RunLedgerGuard<'_>,
+    loaded: &Loaded,
+    expected: &RunSpec,
+) -> Result<bool> {
+    if !unstarted_embedding(loaded, expected) {
+        return Ok(false);
+    }
+    let mut check = || Ok(());
+    for attempt in guard.enumerate_spool_ids(RUN_MAX_TASKS * 16, &mut check)? {
+        if guard
+            .read_spool(&attempt, SpoolPart::Body, OTHER_SPOOL_MAX_BYTES)?
+            .is_some()
+            || guard
+                .read_spool(&attempt, SpoolPart::Metadata, METADATA_MAX_BYTES as u64)?
+                .is_some()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 impl JobLedger {
+    /// The embedding adapter supplies an exact immutable automatic scope after
+    /// checking its domain-separated provenance and current service identity.
+    /// This is a local closure, never authority to dispatch or raise old limits.
+    pub(crate) fn can_close_unstarted_embedding(&self, expected: &RunSpec) -> Result<bool> {
+        self.with_proof_policy(false, true, |guard, loaded| {
+            unstarted_embedding_without_spool(guard, loaded, expected)
+        })
+    }
+
+    pub(crate) fn close_unstarted_embedding(&self, expected: &RunSpec) -> Result<()> {
+        self.local_write()?;
+        self.with_proof_policy(false, true, |guard, loaded| {
+            if !unstarted_embedding_without_spool(guard, loaded, expected)? {
+                return Err(fail(
+                    ErrorCode::RecoveryRequired,
+                    "embedding work changed before its unsent scope could close",
+                ));
+            }
+            if loaded.state.inspection.state == RunState::Failed {
+                return Ok(());
+            }
+            if matches!(
+                loaded.state.inspection.state,
+                RunState::Planned | RunState::Paused
+            ) {
+                self.append(
+                    guard,
+                    loaded,
+                    EventPayload::RunTransition {
+                        from: loaded.state.inspection.state,
+                        to: RunState::Running,
+                        reason: StopReason::Started,
+                    },
+                )?;
+            }
+            self.append(
+                guard,
+                loaded,
+                EventPayload::RunTransition {
+                    from: RunState::Running,
+                    to: RunState::Failed,
+                    reason: StopReason::Failed("automatic_no_dispatch".into()),
+                },
+            )?;
+            Ok(())
+        })
+    }
+
     /// Verify retained accounting without requiring historical source inputs
     /// to remain current. Every required canonical checkpoint proof must pass.
     /// This uses the original verifier and does not impose a local I/O deadline.

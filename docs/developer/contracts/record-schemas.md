@@ -2,6 +2,10 @@
 
 Implementation contract; [storage](storage.md) owns parsing and validation. Frontmatter is flat. Required common string fields are `wiki_schema: "1"`, `wiki_id`, `wiki_kind`, and `title`. Optional `aliases`, `tags`, and `wiki_depends_on_ids` are string lists; the last authoritatively names supporting assertions for page/entity descriptions. `description` is an optional string. IDs are immutable; filenames and headings are editable.
 
+The Vault marker additionally supports storage schemas 2 and 3. These select
+physical storage arrangements; other canonical records retain schema 1. New
+wikis use storage 3. Catalog schema and storage schema are independent.
+
 In the table, all fields are strings unless marked **integer**, **boolean**, or **list**. All shown fields are required unless marked `?`. Names omit the common `wiki_` prefix. Date/timestamp values must be strings: dates use `YYYY-MM-DD`, timestamps RFC3339 UTC. Hashes use the storage BLAKE3 spelling. Every typed ID field has a same-purpose optional quoted path wikilink for navigation, except lists of operational identifiers. CLI-generated records include the corresponding readable links in their body.
 
 | `wiki_kind` | Kind-specific fields and allowed values |
@@ -33,6 +37,16 @@ A graph review covers every active evidence ID/hash associated with the assertio
 Evidence bodies contain exactly one fenced `text` quotation plus explanation. Its raw interior equals the source slice plus exactly one separator newline in the note's newline convention, even when the slice already ends in a newline. Verification removes only that separator; source CRLF and Unicode remain exact. The importer chooses a fence length exceeding embedded backtick runs. Human wording outside that block is not parsed as a predicate. Mechanically checkable body/projection disagreements produce diagnostics; arbitrary prose cannot be proven equivalent to structured fields.
 
 ## Editor navigation and evidence coordinates
+
+A Source may contain `wiki_presentation`, a flat JSON string with strict version 1
+ownership metadata for its generated readable notes. It binds the Source ID,
+current path, revision, optional content hash and generated-file hash, plus a map
+of published revision routes and any saved historical note hashes. The encoded
+field is limited to 64 KiB and 4096 published revisions; the complete Source still
+must fit its existing 256 KiB envelope limit. Paths are restricted to allocated
+`sources/views/` notes and `sources/views/saved/` historical notes. Display files
+are not canonical records or additional searchable captures. Their revision
+anchors are navigation only; exact immutable SourceSpanRef bytes remain evidence.
 
 Native Obsidian graph nodes follow internal links; typed predicate labels are CLI
 interpretation, not a promised native edge-label UI. Flat Properties and quoted

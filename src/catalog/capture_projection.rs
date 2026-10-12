@@ -122,7 +122,6 @@ fn project_capture_core(
         if plan.source_id == plan.revision_id
             || plan.reused
             || plan.invalidation != Default::default()
-            || !plan.dependencies.is_empty()
         {
             return Err(WikiError::invalid(
                 "capture requires one fresh generated source plan",
@@ -132,6 +131,9 @@ fn project_capture_core(
             .draft
             .ok_or_else(|| WikiError::invalid("capture plan lacks generated operations"))?;
         validate_draft(&draft, &plan.source_id, &plan.revision_id)?;
+        for dependency in &plan.dependencies {
+            work.capture(&dependency.path, &dependency.expected)?;
+        }
 
         let source_path = VaultRelativePath::new(format!("sources/{}/source.md", plan.source_id))?;
         let source_root = VaultRelativePath::new(format!("sources/{}", plan.source_id))?;
@@ -268,6 +270,12 @@ fn project_capture_core(
             required_paths.insert(content_path.clone());
             asset_paths.insert(content_path.clone());
         }
+        required_paths.extend(work.verify_presentation(
+            None,
+            &source_note,
+            &draft.operations,
+            &BTreeSet::new(),
+        )?);
         if operations.keys().cloned().collect::<BTreeSet<_>>() != required_paths {
             return Err(WikiError::invalid(
                 "capture writes outside one exact immutable tree",
@@ -633,9 +641,8 @@ fn validate_draft(
 ) -> Result<()> {
     if draft.origin.is_some()
         || draft.inverse_of.is_some()
-        || !draft.read_preconditions.is_empty()
         || draft.operations.len() < 3
-        || draft.operations.len() > 4
+        || draft.operations.len() > 5
         || draft.title.trim().is_empty()
         || draft.title.len() > 16_384
         || draft.allocated_ids
@@ -664,6 +671,7 @@ fn source_field(name: &str) -> bool {
             | "wiki_current_revision"
             | "wiki_revision"
             | "wiki_revisions"
+            | "wiki_presentation"
     )
 }
 fn revision_field(name: &str) -> bool {

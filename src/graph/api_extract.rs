@@ -151,7 +151,11 @@ impl OfflineApp {
                 self.fs.root(),
                 Duration::from_millis(self.options.lock_timeout_ms),
             )?;
-            engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
+            if catalog.operation_state()?.is_some() {
+                engine.recover_indexed(&writer, &catalog)?;
+            } else {
+                engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
+            }
             catalog.guard_current(None)?;
             generation_cache::retain_input(&self.fs, &writer, &task_plan)?;
             let summary = service.summary();
@@ -199,6 +203,7 @@ impl OfflineApp {
             )?;
             generation_cache::retain_input(&self.fs, &writer, &task_plan)?;
         }
+        self.recover_graph_generation_publication()?;
         let inspection = ledger.replay()?.inspection;
         if existing {
             let deadline_ms = u64::try_from(
@@ -256,6 +261,7 @@ impl OfflineApp {
             coverage,
         } = context;
         let offline = self.options.offline || options.policy.offline;
+        self.recover_graph_generation_publication()?;
         let inspection = ledger.replay()?.inspection;
         if inspection
             .tasks
@@ -282,6 +288,21 @@ impl OfflineApp {
                 "extraction source or packet authority changed before execution",
             ));
         }
+        let committed_generation = if retained_task.state != TaskState::Completed {
+            if let Some(attempt) = inspection.attempts.iter().find(|a| {
+                a.attempt.task_key == task.key
+                    && matches!(
+                        a.phase,
+                        AttemptPhase::Received | AttemptPhase::OutputCommitted
+                    )
+            }) {
+                self.recover_committed_graph_generation(ledger, &attempt.attempt, complete_run)?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let (output, receipt, response, reused) = if retained_task.state == TaskState::Completed {
             let output = retained_task
                 .outputs
@@ -311,6 +332,9 @@ impl OfflineApp {
                 crate::app::remote::finish_provider_job(ledger)?;
             }
             self.checkpoint_generation(ledger)?;
+            (output, receipt, retained.response.into_bytes(), true)
+        } else if let Some((output, receipt)) = committed_generation {
+            let retained = generation_cache::load_output(&self.fs, &output, task, packet)?;
             (output, receipt, retained.response.into_bytes(), true)
         } else {
             let pending = inspection.attempts.iter().find(|a| {
@@ -511,7 +535,11 @@ impl OfflineApp {
             self.fs.root(),
             Duration::from_millis(self.options.lock_timeout_ms),
         )?;
-        engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
+        if catalog.operation_state()?.is_some() {
+            engine.recover_indexed(&writer, &catalog)?;
+        } else {
+            engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
+        }
         catalog.guard_current(None)?;
         let view = SourceView::from_fs_bounded(&self.fs, packet::SOURCE_CAP, 4096)?;
         let validated = wire::validate_response(packet, &view, &response)?;

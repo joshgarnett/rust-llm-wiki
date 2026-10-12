@@ -5,7 +5,7 @@ pub mod dispatch;
 pub mod extraction;
 pub mod resolution;
 pub use arguments::{Arguments, Command, OutputFormat};
-pub use dispatch::{execute, present, present_with_wiki};
+pub use dispatch::{execute, present, present_detailed, present_with_wiki};
 mod decisions;
 mod review;
 
@@ -29,6 +29,9 @@ mod health;
 
 pub mod config_set;
 mod config_show;
+mod graph_status;
+mod search_status;
+pub use search_status::human_warning;
 mod human_status;
 mod probe_diagnostic;
 pub mod setup;

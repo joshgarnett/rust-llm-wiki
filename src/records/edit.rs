@@ -13,10 +13,10 @@ pub fn migrate_schema(note: &ParsedNote, target: &str, expected: &Blake3Hash) ->
             "migration predecessor hash differs",
         ));
     }
-    if target != "1" && target != "2" {
+    if !matches!(target, "1" | "2" | "3") {
         return Err(WikiError::new(
             ErrorCode::CapabilityUnavailable,
-            "only legacy schema 1 and vault storage layout 2 migrations are implemented",
+            "only legacy schema 1 and vault storage layouts 2 and 3 migrations are implemented",
         ));
     }
     if !matches!(
@@ -36,7 +36,7 @@ pub fn migrate_schema(note: &ParsedNote, target: &str, expected: &Blake3Hash) ->
             return Ok(note.raw.clone());
         }
         (Some("0"), "1") => {}
-        (Some("1"), "2")
+        (Some("1"), "2" | "3") | (Some("2"), "3")
             if note
                 .canonical
                 .as_ref()

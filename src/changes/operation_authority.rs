@@ -55,6 +55,8 @@ pub(crate) struct ActiveOperation {
     pub(crate) change: PreparedChange,
     pub(crate) starting: Publication,
     pub(crate) intended: Publication,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) intent_hash: Option<Blake3Hash>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -279,6 +281,17 @@ pub(crate) fn begin(
     change: PreparedChange,
     intended: Publication,
 ) -> Result<Authority> {
+    begin_with_intent(fs, writer, expected, change, intended, None)
+}
+/// V5 callers atomically reserve the complete retained proof before mutation.
+pub(crate) fn begin_with_intent(
+    fs: &VaultFs,
+    writer: &WriterPermit,
+    expected: &Authority,
+    change: PreparedChange,
+    intended: Publication,
+    intent_hash: Option<Blake3Hash>,
+) -> Result<Authority> {
     expected.require_idle()?;
     require_successor(expected.publication(), &intended)?;
     let mut next = expected.next()?;
@@ -286,6 +299,7 @@ pub(crate) fn begin(
         change,
         starting: expected.publication().clone(),
         intended,
+        intent_hash,
     });
     persist(fs, writer, Some(expected), next)
 }
@@ -682,6 +696,27 @@ mod tests {
     };
     fn vault() -> RecordId {
         RecordId::new("vault_authority").unwrap()
+    }
+    #[test]
+    fn old_active_operation_bytes_remain_exact_without_graph_binding() {
+        // This historical literal must not acquire a null/extra field. Old
+        // binaries reject the new Some field via deny_unknown_fields.
+        let active = ActiveOperation {
+            change: change(),
+            starting: publication(1),
+            intended: publication(2),
+            intent_hash: None,
+        };
+        let old=serde_json::to_vec(&serde_json::json!({"change":active.change,"starting":active.starting,"intended":active.intended})).unwrap();
+        let decoded: ActiveOperation = serde_json::from_slice(&old).unwrap();
+        assert_eq!(decoded, active);
+        let expected = format!(
+            "{{\"change\":{},\"starting\":{},\"intended\":{}}}",
+            serde_json::to_string(&active.change).unwrap(),
+            serde_json::to_string(&active.starting).unwrap(),
+            serde_json::to_string(&active.intended).unwrap()
+        );
+        assert_eq!(serde_json::to_string(&active).unwrap(), expected);
     }
     fn publication(epoch: u64) -> Publication {
         Publication {

@@ -568,9 +568,9 @@ impl VaultRoot {
         let _profile = profile::portable();
         let mut planned = BTreeMap::<String, String>::new();
         let mut targets = std::collections::BTreeSet::new();
-        let retained = match layout {
-            Some(layout) => layout.retained(self)?,
-            None => crate::storage::layout::active(self)?,
+        let kind = match layout {
+            Some(layout) => layout.kind(self)?,
+            None => crate::storage::layout::layout_kind(self)?,
         };
         for relative in paths {
             progress()?;
@@ -581,8 +581,8 @@ impl VaultRoot {
             // physical path under both storage layouts; logical alias guards
             // still run, with the same frozen published-prefix exemption.
             let scope = scope.filter(|scope| scope.allows(relative));
-            if retained {
-                self.validate_retained_logical_siblings(relative, scope, progress)?;
+            if kind != crate::storage::layout::LayoutKind::Legacy {
+                self.validate_retained_logical_siblings(relative, scope, kind, progress)?;
             }
             let physical = match layout {
                 Some(layout) => layout.map(self, relative)?,
@@ -668,12 +668,19 @@ impl VaultRoot {
         &self,
         relative: &VaultRelativePath,
         scope: Option<&crate::catalog::source_refresh::PublishedRefreshPaths>,
+        kind: crate::storage::layout::LayoutKind,
         progress: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         let mut parent = String::new();
         for component in relative.as_str().split('/') {
             progress()?;
             let reserved: &[&str] = match parent.as_str() {
+                "" if kind == crate::storage::layout::LayoutKind::ReadableSources => {
+                    &["changes", "knowledge", "runs", "sources"]
+                }
+                "sources" if kind == crate::storage::layout::LayoutKind::ReadableSources => {
+                    &["views"]
+                }
                 "" => &["changes", "knowledge", "runs"],
                 "knowledge" => &["extractions"],
                 "knowledge/extractions" => &["packets"],
@@ -709,12 +716,16 @@ impl VaultRoot {
             };
             // Runs and outputs are split directories: readable reports can stay
             // visible while machine records and their parent IDs live internally.
-            let internal = if parent == "runs" || parent.starts_with("runs/") {
+            let internal = if parent == "runs"
+                || parent.starts_with("runs/")
+                || parent == "sources"
+                    && kind == crate::storage::layout::LayoutKind::ReadableSources
+            {
                 Some(VaultRelativePath::new(format!(".wiki/retained/{parent}"))?)
             } else if parent.is_empty() {
                 None
             } else {
-                crate::storage::layout::managed_path(&VaultRelativePath::new(&parent)?)
+                crate::storage::layout::managed_path_for(kind, &VaultRelativePath::new(&parent)?)
             };
             let internal = internal
                 .map(|path| self.resolve_raw_budgeted(&path, progress))
@@ -801,8 +812,8 @@ impl VaultRoot {
         on_entry: &mut dyn FnMut() -> Result<()>,
         on_path: &mut dyn FnMut(&VaultRelativePath) -> Result<()>,
     ) -> Result<Vec<VaultRelativePath>> {
-        let retained = crate::storage::layout::active(self)?;
-        self.scan_markdown_layout(max_files, on_entry, on_path, retained)
+        let kind = crate::storage::layout::layout_kind(self)?;
+        self.scan_markdown_layout(max_files, on_entry, on_path, kind)
     }
     /// Reuse an operation's validated layout; retain all physical path checks.
     pub(crate) fn scan_markdown_with_layout(
@@ -812,31 +823,62 @@ impl VaultRoot {
         on_path: &mut dyn FnMut(&VaultRelativePath) -> Result<()>,
         layout: &crate::storage::layout::ValidatedLayout,
     ) -> Result<Vec<VaultRelativePath>> {
-        self.scan_markdown_layout(max_files, on_entry, on_path, layout.retained(self)?)
+        self.scan_markdown_layout(max_files, on_entry, on_path, layout.kind(self)?)
     }
     fn scan_markdown_layout(
         &self,
         max_files: usize,
         on_entry: &mut dyn FnMut() -> Result<()>,
         on_path: &mut dyn FnMut(&VaultRelativePath) -> Result<()>,
-        retained: bool,
+        kind: crate::storage::layout::LayoutKind,
     ) -> Result<Vec<VaultRelativePath>> {
         #[cfg(test)]
         crate::catalog::query_diagnostics::access("canonical_scan");
         let mut out = Vec::new();
-        Self::scan_dir(&self.path, "", &mut out, max_files, on_entry, on_path)?;
-        if retained {
+        let readable_sources = kind == crate::storage::layout::LayoutKind::ReadableSources;
+        Self::scan_dir(
+            &self.path,
+            "",
+            &mut out,
+            max_files,
+            on_entry,
+            on_path,
+            readable_sources,
+        )?;
+        if kind != crate::storage::layout::LayoutKind::Legacy {
             // Old physical copies may survive interrupted unlink. Only the active
             // logical namespace supplies canonical identity after activation.
-            out.retain(|path| crate::storage::layout::managed_path(path).is_none());
-            for (physical, logical) in [
+            out.retain(|path| crate::storage::layout::managed_path_for(kind, path).is_none());
+            let mut roots = vec![
                 (".wiki/retained/packets", "knowledge/extractions/packets"),
                 (".wiki/retained/runs", "runs"),
-            ] {
+            ];
+            if readable_sources {
+                roots.push((".wiki/retained/sources", "sources"));
+            }
+            for (physical, logical) in roots {
                 let directory =
                     self.resolve_raw_budgeted(&VaultRelativePath::new(physical)?, on_entry)?;
                 if directory.is_dir() {
-                    Self::scan_dir(&directory, logical, &mut out, max_files, on_entry, on_path)?;
+                    let start = out.len();
+                    Self::scan_dir(
+                        &directory,
+                        logical,
+                        &mut out,
+                        max_files,
+                        on_entry,
+                        on_path,
+                        readable_sources,
+                    )?;
+                    if logical == "sources" {
+                        let admitted = out
+                            .drain(start..)
+                            .filter(|path| {
+                                crate::storage::layout::source_managed_path(path).is_some()
+                            })
+                            .collect::<Vec<_>>();
+                        out.extend(admitted);
+                    }
                 }
             }
         }
@@ -850,6 +892,7 @@ impl VaultRoot {
         max_files: usize,
         on_entry: &mut dyn FnMut() -> Result<()>,
         on_path: &mut dyn FnMut(&VaultRelativePath) -> Result<()>,
+        readable_sources: bool,
     ) -> Result<()> {
         on_entry()?;
         for entry in crate::maintenance_diagnostic::observe(
@@ -878,6 +921,7 @@ impl VaultRoot {
                 .file_type()
                 .map_err(|e| io_error("scan file type", e))?;
             if kind.is_symlink()
+                || readable_sources && prefix == "sources" && name == "views"
                 || matches!(name, ".wiki" | ".git")
                 || (prefix.is_empty() && name == "changes")
             {
@@ -900,7 +944,15 @@ impl VaultRoot {
                 if exact_marker_budgeted(&entry.path(), on_entry)? {
                     continue;
                 }
-                Self::scan_dir(&entry.path(), &relative, out, max_files, on_entry, on_path)?;
+                Self::scan_dir(
+                    &entry.path(),
+                    &relative,
+                    out,
+                    max_files,
+                    on_entry,
+                    on_path,
+                    readable_sources,
+                )?;
             } else if kind.is_file() && name.ends_with(".md") && name != "index.md" {
                 if out.len() >= max_files {
                     return Err(WikiError::new(

@@ -116,6 +116,17 @@ impl QuerySnapshot {
     ) -> Result<Vec<(VaultRelativePath, Blake3Hash)>> {
         self.policy_members_bounded(key, excluded_paths, 16)
     }
+    pub(super) fn policy_members_for_graph(
+        &self,
+        key: &PolicyInputKey,
+        excluded_paths: &BTreeSet<VaultRelativePath>,
+    ) -> Result<Vec<(VaultRelativePath, Blake3Hash)>> {
+        self.policy_members_bounded(
+            key,
+            excluded_paths,
+            super::graph_projection::MAX_GRAPH_WRITES,
+        )
+    }
     pub(super) fn policy_members_for_page_move(
         &self,
         key: &PolicyInputKey,

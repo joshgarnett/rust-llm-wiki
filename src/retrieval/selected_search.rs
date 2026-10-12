@@ -17,7 +17,7 @@ use serde::Serialize;
 #[cfg(test)]
 use std::time::Instant;
 
-pub(super) const SCOPE_WARNING: &str = "Selected document dependencies are verified against the published discovery page. Global membership, identity uniqueness, completeness and unselected freshness are not verified.";
+pub(crate) const SCOPE_WARNING: &str = "Selected document dependencies are verified against the published discovery page. Global membership, identity uniqueness, completeness and unselected freshness are not verified.";
 
 #[cfg(test)]
 #[derive(Default, Debug, Serialize)]
@@ -113,6 +113,7 @@ pub(super) fn bind_hit(
         || hit.eligibility != document.eligibility
         || hit.source_id != document.source_id
         || hit.owner_revision != document.owner_revision
+        || hit.declared_source_refs != lexical::declared_source_refs(document)
     {
         return Err(conflict(
             "displayed locator or metadata differs from authenticated document",

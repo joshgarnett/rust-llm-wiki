@@ -106,6 +106,32 @@ pub(crate) enum ResponseMode {
     #[serde(rename = "json-schema")]
     JsonSchema,
 }
+/// Optional effort sent only when explicitly configured for generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+impl ReasoningEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum HelperOutputMode {
@@ -235,6 +261,7 @@ struct RawService {
     output_limit_field: Option<OutputLimitField>,
     response_mode: Option<ResponseMode>,
     max_output_tokens: Option<u64>,
+    reasoning_effort: Option<ReasoningEffort>,
     timeout_seconds: Option<u32>,
     connect_timeout_seconds: Option<u32>,
     ca_file: Option<PathBuf>,
@@ -269,6 +296,7 @@ pub(crate) struct Service {
     pub(crate) output_limit_field: Option<OutputLimitField>,
     pub(crate) response_mode: Option<ResponseMode>,
     pub(crate) max_output_tokens: Option<u64>,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
     pub(crate) timeout_seconds: Option<u32>,
     pub(crate) connect_timeout_seconds: Option<u32>,
     #[cfg(test)]
@@ -484,6 +512,7 @@ impl ProviderConfig {
                     // Configured count or auto, never a discovered provider dimension.
                     "dimensions":service.dimensions,
                     "effective_output_token_limit":output_limit,
+                    "reasoning_effort":service.reasoning_effort,
                     "command_auth":command_auth,
                 }));
             }
@@ -990,7 +1019,8 @@ fn service(r: RawService) -> Result<Service> {
     let generation = r.instruction_role.is_some()
         || r.output_limit_field.is_some()
         || r.response_mode.is_some()
-        || r.max_output_tokens.is_some();
+        || r.max_output_tokens.is_some()
+        || r.reasoning_effort.is_some();
     if (r.adapter != AdapterKind::EmbeddingsV1 && embedding)
         || (!matches!(
             r.adapter,
@@ -1065,7 +1095,11 @@ fn service(r: RawService) -> Result<Service> {
             "no_redirect",
         ),
     )?;
-    let projection = serde_json::json!({"adapter":r.adapter,"endpoint":endpoint_fingerprint,"model":r.model,"revision":r.revision,"max_batch_items":r.max_batch_items,"max_batch_bytes":r.max_batch_bytes,"dimensions":r.dimensions,"max_input_tokens":r.max_input_tokens,"tokenizer":r.tokenizer,"instruction_role":r.instruction_role,"output_limit_field":r.output_limit_field,"response_mode":r.response_mode,"max_output_tokens":r.max_output_tokens,"timeout_seconds":r.timeout_seconds,"connect_timeout_seconds":r.connect_timeout_seconds,"headers":r.headers,"secret_headers":r.secret_headers,"auth":a.redacted(),"rate_card":r.rate_card});
+    let mut projection = serde_json::json!({"adapter":r.adapter,"endpoint":endpoint_fingerprint,"model":r.model,"revision":r.revision,"max_batch_items":r.max_batch_items,"max_batch_bytes":r.max_batch_bytes,"dimensions":r.dimensions,"max_input_tokens":r.max_input_tokens,"tokenizer":r.tokenizer,"instruction_role":r.instruction_role,"output_limit_field":r.output_limit_field,"response_mode":r.response_mode,"max_output_tokens":r.max_output_tokens,"timeout_seconds":r.timeout_seconds,"connect_timeout_seconds":r.connect_timeout_seconds,"headers":r.headers,"secret_headers":r.secret_headers,"auth":a.redacted(),"rate_card":r.rate_card});
+    // Omitted effort retains the pre-existing v1 projection and retained task identity.
+    if let Some(effort) = r.reasoning_effort {
+        projection["reasoning_effort"] = serde_json::json!(effort);
+    }
     let fingerprint = hash("lwiki.provider.service.v1", &projection)?;
     Ok(Service {
         adapter: r.adapter,
@@ -1080,6 +1114,7 @@ fn service(r: RawService) -> Result<Service> {
         output_limit_field: r.output_limit_field,
         response_mode: r.response_mode,
         max_output_tokens: r.max_output_tokens,
+        reasoning_effort: r.reasoning_effort,
         timeout_seconds: r.timeout_seconds,
         connect_timeout_seconds: r.connect_timeout_seconds,
         #[cfg(test)]
@@ -1093,4 +1128,52 @@ fn service(r: RawService) -> Result<Service> {
         endpoint_fingerprint,
         fingerprint,
     })
+}
+
+#[cfg(test)]
+mod reasoning_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn raw(extra: &str) -> RawService {
+        toml::from_str(&format!(
+            "adapter = 'responses-v1'\nurl = 'https://gateway.example/v1/responses'\nmodel = 'test-model'\n{extra}\n[auth]\nkind = 'static'\nkey_env = 'LWIKI_NEVER_READ_REASONING_KEY'\n"
+        )).unwrap()
+    }
+
+    #[test]
+    fn omitted_effort_preserves_original_v1_service_projection() {
+        let s = service(raw("")).unwrap();
+        // Frozen pre-effort projection: enumerate old keys independently of the new builder.
+        let old = json!({
+            "adapter":"responses-v1", "endpoint":s.endpoint_fingerprint,
+            "model":"test-model", "revision":null, "max_batch_items":null,
+            "max_batch_bytes":null, "dimensions":null, "max_input_tokens":null,
+            "tokenizer":null, "instruction_role":null, "output_limit_field":null,
+            "response_mode":null, "max_output_tokens":null, "timeout_seconds":null,
+            "connect_timeout_seconds":null, "headers":{}, "secret_headers":{},
+            "auth":{"kind":"static","selector":{"kind":"env","name":"LWIKI_NEVER_READ_REASONING_KEY"},"header":"Authorization","prefix":"private_prefix"},
+            "rate_card":null
+        });
+        assert_eq!(
+            s.fingerprint,
+            hash("lwiki.provider.service.v1", &old).unwrap()
+        );
+        assert!(s.reasoning_effort.is_none());
+        let explicit = service(raw("reasoning_effort = 'none'\n")).unwrap();
+        assert_eq!(explicit.reasoning_effort, Some(ReasoningEffort::None));
+        assert_ne!(explicit.fingerprint, s.fingerprint);
+    }
+
+    #[test]
+    fn reasoning_configuration_rejects_embedding_and_unknown_values() {
+        let mut r = raw("reasoning_effort = 'low'\n");
+        r.adapter = AdapterKind::EmbeddingsV1;
+        assert!(service(r).is_err());
+        for value in ["default", "ultra", "", "LOW"] {
+            assert!(toml::from_str::<RawService>(&format!(
+                "url='https://gateway.example/v1/responses'\nmodel='test-model'\nreasoning_effort='{value}'\n[auth]\nkind='static'\nkey_env='NEVER_READ'\n"
+            )).is_err());
+        }
+    }
 }

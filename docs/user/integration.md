@@ -110,10 +110,13 @@ start page. Edit its readable text if you want to customize it; preserve the
 | Location | What you will find |
 | --- | --- |
 | `pages/` | Pages you and your agent write, including drafts |
-| `sources/` | Saved source notes and their earlier captured versions |
+| `sources/views/` | Readable saved sources, including older copies linked from pages |
 | `knowledge/` | Reviewed facts, their evidence and related records |
-| `changes/` | Records of changes made through lwiki |
-| `.wiki/` | Hidden files needed for search, recovery and remote-call accounting |
+| `.wiki/` | Original captured bytes, change history, and files needed for search and recovery |
+
+Older wikis may keep source versions and change records in visible folders.
+Use [source migration](everyday-use.md#browse-your-wiki-in-obsidian) to organize
+them for browsing while keeping their history.
 
 Keep writing your original notes wherever you prefer. Creating a wiki in an
 existing folder does not automatically capture them. [Capture a chosen note](everyday-use.md#capture-and-refresh-notes)

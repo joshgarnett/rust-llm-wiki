@@ -75,7 +75,7 @@ pub(crate) fn project_withdraw(
         }
     }
     let note = work.note(&original.path)?;
-    let fields = BTreeMap::from([
+    let mut fields = BTreeMap::from([
         ("wiki_status".into(), "withdrawn".into()),
         (
             "wiki_withdrawn_at".into(),
@@ -83,7 +83,44 @@ pub(crate) fn project_withdraw(
         ),
         ("wiki_withdrawal_reason".into(), reason.into()),
     ]);
+    let mut operations = Vec::new();
+    if crate::storage::layout::layout_kind(fs.root())?
+        == crate::storage::layout::LayoutKind::ReadableSources
+    {
+        let proposed = crate::sources::presentation_planning::proposed_source(&note, &fields)?;
+        let presentation = crate::sources::presentation_planning::plan_change(
+            &proposed,
+            note.body(),
+            Some(&note),
+            &[],
+            &BTreeSet::new(),
+            &mut |path, maximum| crate::changes::prepare::read_bounded(fs, path, maximum),
+        )?;
+        fields.insert(
+            "wiki_presentation".into(),
+            presentation.plan.metadata.encode()?.into(),
+        );
+        for dependency in presentation.dependencies {
+            work.capture(&dependency.path, &dependency.expected)?;
+        }
+        operations.extend(presentation.plan.writes);
+    }
     let bytes = edit_note(&note, &fields, None, &original.hash)?;
+    operations.push(ExpectedWrite {
+        target: original.path.clone(),
+        expected: ExpectedState::Hash(original.hash.clone()),
+        proposed: Some(bytes.clone()),
+        apply_after: operations.iter().map(|op| op.target.clone()).collect(),
+    });
+    let after_note = crate::records::parse_note(&bytes);
+    work.verify_presentation(Some(&note), &after_note, &operations, &BTreeSet::new())?;
+    for operation in &operations {
+        if operation.target != original.path {
+            let bytes = operation.proposed.as_ref().expect("presentation write");
+            work.charge(bytes.len())?;
+            work.overlay.insert(operation.target.clone(), bytes.clone());
+        }
+    }
     work.charge(bytes.len())?;
     if bytes.len() > limits.max_file_bytes {
         return Err(super::source_projection::budget());
@@ -97,7 +134,7 @@ pub(crate) fn project_withdraw(
     let fixed = |key: &&String| {
         !matches!(
             key.as_str(),
-            "wiki_status" | "wiki_withdrawn_at" | "wiki_withdrawal_reason"
+            "wiki_status" | "wiki_withdrawn_at" | "wiki_withdrawal_reason" | "wiki_presentation"
         )
     };
     if record.id() != source_id
@@ -207,22 +244,21 @@ pub(crate) fn project_withdraw(
     emit_structural(&mut work, structural, &mut delta)?;
     work.emit_links(&original.path, &mut delta)?;
     let mut after = work.before.clone();
-    after.insert(
-        original.path.clone(),
-        ExpectedState::Hash(Blake3Hash::digest(&bytes)),
-    );
+    for operation in &operations {
+        after.insert(
+            operation.target.clone(),
+            ExpectedState::Hash(Blake3Hash::digest(
+                operation.proposed.as_deref().expect("withdrawal write"),
+            )),
+        );
+    }
     let draft = ChangeDraft {
         title: format!("Withdraw {}", original.record.title()),
         origin: None,
         inverse_of: None,
         allocated_ids: BTreeMap::new(),
         read_preconditions: deps(work.before.clone()),
-        operations: vec![ExpectedWrite {
-            target: original.path,
-            expected: ExpectedState::Hash(original.hash),
-            proposed: Some(bytes),
-            apply_after: vec![],
-        }],
+        operations,
     };
     delta.dependencies = deps(after.clone());
     delta.validate()?;
