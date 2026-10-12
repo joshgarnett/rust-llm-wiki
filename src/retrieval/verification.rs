@@ -69,16 +69,18 @@ pub(crate) fn verify_current_observation(
         verified_at: crate::sources::revision::timestamp()?,
     })
 }
-pub(super) struct Meter {
+pub(crate) struct Meter {
     budget: VerificationBudget,
     start: Instant,
     bytes: usize,
     files: usize,
     entries: usize,
     file_byte_limits: BTreeMap<VaultRelativePath, usize>,
+    optional_display: bool,
+    last_read_path: Option<std::path::PathBuf>,
 }
 impl Meter {
-    pub(super) fn new(budget: &VerificationBudget) -> Self {
+    pub(crate) fn new(budget: &VerificationBudget) -> Self {
         Self {
             budget: budget.clone(),
             start: Instant::now(),
@@ -86,6 +88,8 @@ impl Meter {
             files: 0,
             entries: 0,
             file_byte_limits: BTreeMap::new(),
+            optional_display: false,
+            last_read_path: None,
         }
     }
     pub(super) fn check(&self) -> Result<()> {
@@ -99,7 +103,7 @@ impl Meter {
             .max_elapsed_ms
             .saturating_sub(u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX))
     }
-    pub(super) fn work(&self) -> (usize, usize, usize) {
+    pub(crate) fn work(&self) -> (usize, usize, usize) {
         (self.bytes, self.files, self.entries)
     }
     /// An earlier owner proof cannot retain a larger allowance than the
@@ -127,6 +131,54 @@ impl Meter {
                 .saturating_add(remaining.max_elapsed_ms),
         );
         self.check()
+    }
+    /// Optional display reads share accounting but cannot spend the resources
+    /// held for the mandatory final evidence pass. Failed work is charged too.
+    pub(crate) fn read_optional(
+        &mut self,
+        catalog: &Catalog,
+        path: &VaultRelativePath,
+        byte_limit: usize,
+        reserve: (usize, usize, usize),
+        remaining_ms: u64,
+    ) -> Option<(Vec<u8>, std::path::PathBuf)> {
+        let allowance = VerificationBudget {
+            max_bytes: self
+                .budget
+                .max_bytes
+                .saturating_sub(self.bytes)
+                .saturating_sub(reserve.0)
+                .min(byte_limit),
+            max_files: self
+                .budget
+                .max_files
+                .saturating_sub(self.files)
+                .saturating_sub(reserve.1),
+            max_entries: self
+                .budget
+                .max_entries
+                .saturating_sub(self.entries)
+                .saturating_sub(reserve.2),
+            max_elapsed_ms: self.remaining_ms().min(remaining_ms),
+        };
+        if allowance.max_bytes == 0
+            || allowance.max_files == 0
+            || allowance.max_entries == 0
+            || allowance.max_elapsed_ms == 0
+        {
+            return None;
+        }
+        let mut optional = Meter::new(&allowance);
+        optional.optional_display = true;
+        optional.file_byte_limits.insert(path.clone(), byte_limit);
+        let result = (|| -> Result<_> {
+            let bytes = optional.read(catalog, path)?;
+            Ok(bytes.and_then(|bytes| optional.last_read_path.take().map(|full| (bytes, full))))
+        })();
+        self.bytes += optional.bytes;
+        self.files += optional.files;
+        self.entries += optional.entries;
+        result.ok().flatten()
     }
     fn entry(&mut self) -> Result<()> {
         self.check()?;
@@ -189,7 +241,26 @@ impl Meter {
         }
         self.files += 1;
         self.entry()?;
-        let mut file = match File::open(&full) {
+        self.last_read_path = Some(full.clone());
+        let opened = if self.optional_display {
+            // A FIFO or symlink swapped after resolution must not turn optional
+            // navigation into an unbounded blocking read.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .open(&full)
+            }
+            #[cfg(not(unix))]
+            {
+                File::open(&full)
+            }
+        } else {
+            File::open(&full)
+        };
+        let mut file = match opened {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(io_error(e)),
@@ -366,6 +437,55 @@ fn maintain(catalog: &Catalog, writer: &WriterPermit, meter: &Meter) -> Result<(
     catalog.sync(writer)?;
     meter.check()
 }
+// Only already admitted document and assertion evidence owners are considered.
+fn link_documents<'a>(
+    reader: &'a ReaderSnapshot,
+    hits: &super::HitSet,
+    graph: Option<&crate::graph::GraphResult>,
+) -> Vec<&'a crate::catalog::DocumentRow> {
+    let mut paths = std::collections::BTreeSet::new();
+    let mut documents = Vec::new();
+    for hit in &hits.hits {
+        if paths.insert(hit.locator.path.clone())
+            && let Some(document) = reader
+                .projection()
+                .documents
+                .iter()
+                .find(|document| document.path == hit.locator.path)
+        {
+            documents.push(document);
+        }
+    }
+    let assertions = graph
+        .into_iter()
+        .flat_map(|graph| &graph.assertions)
+        .map(|assertion| assertion.record_ref.record_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let revisions = reader
+        .projection()
+        .records
+        .values()
+        .filter(|row| {
+            row.record.kind() == RecordKind::Evidence
+                && row
+                    .record
+                    .string("wiki_assertion_id")
+                    .is_some_and(|id| assertions.contains(id))
+        })
+        .filter_map(|row| row.record.string("wiki_source_revision"))
+        .collect::<std::collections::BTreeSet<_>>();
+    for document in &reader.projection().documents {
+        if document
+            .owner_revision
+            .as_ref()
+            .is_some_and(|id| revisions.contains(id.as_str()))
+            && paths.insert(document.path.clone())
+        {
+            documents.push(document);
+        }
+    }
+    documents
+}
 fn candidates(
     reader: &ReaderSnapshot,
     query: &str,
@@ -398,7 +518,7 @@ pub(super) fn seal(
     draft.usage.verification_bytes = meter.bytes;
     draft.usage.verification_files = meter.files;
     draft.usage.verification_entries = meter.entries;
-    draft.warnings.push("proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls".into());
+    draft.warnings.push("proof bytes/files meter canonical notes, source/dependency payloads and optional saved-display reads; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls".into());
     ContextResult {
         network_used: false,
         text: draft.text,
@@ -573,13 +693,33 @@ pub(crate) fn context_with_reader(
         ));
     }
     let (hits, graph) = candidates(reader, query, &request)?;
-    let draft = context::assemble_for_query(
+    let documents = link_documents(reader, &hits, graph.as_ref());
+    let reserve = meter.work();
+    let mut links = if matches!(
+        options.selection,
+        super::context_selection_packet::SelectionAction::Prepare
+    ) {
+        super::source_links::SourceLinkProof::empty()
+    } else {
+        super::source_links::SourceLinkProof::observe(
+            catalog,
+            &reader.projection().records,
+            documents,
+            &mut meter,
+            reserve,
+        )
+    };
+    let signals = ContextSelectionSignals {
+        source_links: links.links.clone(),
+        ..Default::default()
+    };
+    let mut draft = context::assemble_for_query(
         reader,
         &request,
         &hits,
         graph.as_ref(),
         query,
-        &ContextSelectionSignals::default(),
+        &signals,
         &options.selection,
     )?;
     meter.check()?;
@@ -606,6 +746,9 @@ pub(crate) fn context_with_reader(
     meter.check()?;
     if let Some(fault) = &options.fault {
         fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
+    }
+    if links.recheck(catalog, &mut meter) {
+        draft.retain_source_links(reader, &request, &links.links)?;
     }
     catalog.guard_current(None)?;
     let final_input = capture(catalog, Some(reader.projection()), &mut meter)?;
@@ -783,8 +926,25 @@ where
                     "initial control membership or dependency bytes differ from pinned index",
                 ));
             }
-            let (hits, graph, signals) = retrieve(&reader, &request)?;
-            let assembled = context::assemble_for_query(
+            let (hits, graph, mut signals) = retrieve(&reader, &request)?;
+            let documents = link_documents(&reader, &hits, graph.as_ref());
+            let reserve = meter.work();
+            let mut links = if matches!(
+                options.selection,
+                super::context_selection_packet::SelectionAction::Prepare
+            ) {
+                super::source_links::SourceLinkProof::empty()
+            } else {
+                super::source_links::SourceLinkProof::observe(
+                    catalog,
+                    &reader.projection().records,
+                    documents,
+                    &mut meter,
+                    reserve,
+                )
+            };
+            signals.source_links = links.links.clone();
+            let mut assembled = context::assemble_for_query(
                 &reader,
                 &request,
                 &hits,
@@ -822,6 +982,9 @@ where
             meter.check()?;
             catalog.guard_current(None)?;
             meter.check()?;
+            if links.recheck(catalog, &mut meter) {
+                assembled.retain_source_links(&reader, &request, &links.links)?;
+            }
             let final_input = capture(catalog, Some(reader.projection()), &mut meter)?;
             if !matches(catalog, &final_input, &reader, &meter)? {
                 return Err(conflict(

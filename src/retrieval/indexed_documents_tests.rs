@@ -534,6 +534,7 @@ impl TraceCard {
                 span: self.passage.span,
                 label: self.passage.label,
                 eligibility: self.passage.eligibility,
+                source_links: Vec::new(),
                 citations: self.passage.citations,
                 contributors: Vec::new(),
                 rank_contributions: self.passage.rank_contributions,

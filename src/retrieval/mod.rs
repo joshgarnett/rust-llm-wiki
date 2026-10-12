@@ -24,6 +24,9 @@ pub(crate) mod selected_documents;
 pub mod selected_search;
 #[cfg(test)]
 mod selected_search_experiment;
+#[cfg(test)]
+mod source_link_critic_tests;
+pub(crate) mod source_links;
 pub mod types;
 pub(crate) mod unit_inventory_types;
 pub mod verification;

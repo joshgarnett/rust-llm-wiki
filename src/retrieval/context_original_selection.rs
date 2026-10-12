@@ -511,6 +511,7 @@ pub(super) fn context(
     if let Some(admission) = &admission {
         warnings.extend(admission.warnings());
     }
+    let mut links = super::source_links::SourceLinkProof::empty();
     let mut draft = if let Some(reply) = reply {
         validate_reply(&packet, reply, request.documents.limits.excerpt_bytes)?;
         let mut packets = Vec::new();
@@ -563,6 +564,17 @@ pub(super) fn context(
             dependency_fingerprint: proof.fingerprint.clone(),
             warnings: Vec::new(),
         };
+        // Range authority was validated above. Observe only within this route's
+        // already admitted proof; originals preparation performs no view reads.
+        links = proof.observe_source_links(catalog, reader);
+        let selected = SelectedCatalog {
+            reader,
+            proof: &proof,
+        };
+        let signals = ContextSelectionSignals {
+            source_links: links.links.clone(),
+            ..Default::default()
+        };
         context::pack(
             &selected,
             request,
@@ -573,7 +585,7 @@ pub(super) fn context(
                 selection_warnings: warnings,
                 source_aware: true,
                 query: Some(query),
-                signals: &ContextSelectionSignals::default(),
+                signals: &signals,
                 selection_action: &options.selection,
                 hits: &hits,
                 graph: None,
@@ -583,6 +595,7 @@ pub(super) fn context(
         )?
     } else {
         ContextDraft {
+            navigation: vec![],
             text: String::new(),
             passages: Vec::new(),
             bundles: Vec::new(),
@@ -612,6 +625,13 @@ pub(super) fn context(
     reader.check_query_budget()?;
     if let Some(fault) = &options.fault {
         fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
+    }
+    if links.recheck(catalog, proof.meter_mut()) {
+        let selected = SelectedCatalog {
+            reader,
+            proof: &proof,
+        };
+        draft.retain_source_links(&selected, request, &links.links)?;
     }
     proof.recheck(catalog, reader)?;
     reader.check_query_budget()?;

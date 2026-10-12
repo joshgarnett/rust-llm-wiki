@@ -74,14 +74,14 @@
     "migrate"
   ],
   "files": {
-    "SKILL.md": "1c0efa606ff0e3f85ccdd748660830709f52d4d0691b64cbdfeef47c10e9989a",
+    "SKILL.md": "fda9d94515f0fa0bef5b1789d962542b3eb7e9af1576652faf3f8900c782ffe6",
     "agents/openai.yaml": "307ad222dc5d27d563d54b0a0466264fd035378ce2d103bcbf8de4ed2ea1b144",
     "references/cited-page.md": "a09493f2fe488a19dd6dcd6284876afe2ee29734762162f0d5c670a91c71561c",
     "references/commands.md": "ec62204fe12ff3c8f9c8b0929ea469220852a0b07200438a81fef63a473c4cf2",
     "references/examples.json": "c9e5471d1b1506317c140e37f051145d5017e6ef077e7350f771468f88eb6d89",
     "references/workflows.md": "60b54ae15d0ea8b16729b24647ed0926a5e241f95456df03dccd50f9dd68e747"
   },
-  "package_checksum": "f7a0e08882b5f6409f02562b2a926ead5ea9c18924fd42659b0d46057fd2259c",
+  "package_checksum": "56d97ca2633f5bdd0ecc64218cb2f476af0b89e67f91f8bc1a0ec2c28b0fb862",
   "schema": "lwiki.skill-manifest.v1",
   "schemas": [
     "context-original-selection",

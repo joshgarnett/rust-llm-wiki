@@ -47,6 +47,7 @@ pub use pages::{PageBatchRequest, PageUpdate};
 mod source_capture;
 mod source_import;
 mod source_read;
+pub use crate::retrieval::{SourceReadLink, SourceReadLinkStatus};
 pub use source_capture::{
     SourceCaptureAction, SourceCaptureItem, SourceCaptureOutcome, SourceCaptureRequest,
     SourceCaptureTotals,

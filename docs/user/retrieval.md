@@ -217,3 +217,20 @@ If the first passages miss an important condition or exception, ask your agent
 to search for that detail and read more of the relevant notes. It can use the
 [advanced retrieval workflow](../../skills/llm-wiki/references/workflows.md#advanced-retrieval-and-embedding-preparation)
 when ordinary context is insufficient.
+
+## Open a saved source
+
+Cited context and `source read` can show a `Source:` Markdown link beside the
+returned text. Copy that link into your answer or open it to inspect the saved
+copy. Its label tells you whether it is the current copy, an older copy or a
+withdrawn source. Older links open the copy used by the citation.
+
+The JSON output provides the same ready-to-copy link in `source_link.markdown`
+for `source read`, or `source_links` on each context passage. Keep the exact
+citation when saving evidence to a Page. A link helps you open a note; the
+citation identifies the exact saved text.
+
+If the generated copy is missing or has been edited, the command can still return
+the captured text and citation without a link. Use `source read SOURCE_ID` with
+the cited `--revision REVISION_ID` to inspect that text. These links refer to
+files in your local wiki; another computer needs its own local copy.

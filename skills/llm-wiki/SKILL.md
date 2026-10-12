@@ -4,7 +4,7 @@ description: Find answers in the user's local Markdown wiki, capture chosen note
 ---
 
 - **Find:** `lwiki search 'WORDS'`. Choose matching notes.
-- **Answer:** `lwiki context 'QUESTION' --max-bytes 6000 --max-tokens 1500`. Read the returned support and citations.
+- **Answer:** `lwiki context 'QUESTION'`. Read the returned support and citations.
 - **Capture:** `lwiki source capture 'FILE OR FOLDER'`. Save copies of chosen notes that the agent can cite.
 
 Use ordinary human output for these steps. It includes exact citation objects and status messages. Read stdout and stderr. Use JSON only when a task needs its full structured result.

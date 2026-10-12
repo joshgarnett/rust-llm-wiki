@@ -245,6 +245,7 @@ fn passage(
     }
     Ok(ContextPassage {
         locator: locator(vault_id, document)?,
+        source_links: Vec::new(),
         citations: vec![CitationRef::Source(SourceSpanRef {
             source_id: document
                 .source_id
@@ -582,8 +583,26 @@ pub(super) fn context(
     } else {
         warnings.push("pending-apply safety guards still inspect retained change history outside canonical proof byte/file counters; SQL VM and elapsed limits are cooperative and decoded-row ceilings are not a hard process-memory limit".into());
     }
-    let signals = ContextSelectionSignals::default();
-    let draft = context::pack(
+    let reserve = meter.work();
+    let mut links = if matches!(
+        options.selection,
+        super::context_selection_packet::SelectionAction::Prepare
+    ) {
+        super::source_links::SourceLinkProof::empty()
+    } else {
+        super::source_links::SourceLinkProof::observe(
+            catalog,
+            &selected.records,
+            selected.documents.values(),
+            &mut meter,
+            reserve,
+        )
+    };
+    let signals = ContextSelectionSignals {
+        source_links: links.links.clone(),
+        ..Default::default()
+    };
+    let mut draft = context::pack(
         &selected,
         &request,
         PackingInput {
@@ -605,6 +624,9 @@ pub(super) fn context(
     audit_passages(&draft, &selected, request.documents.limits.excerpt_bytes)?;
     if let Some(fault) = &options.fault {
         fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
+    }
+    if links.recheck(catalog, &mut meter) {
+        draft.retain_source_links(&selected, &request, &links.links)?;
     }
     meter.check()?;
     reader.verify_operations(catalog)?;

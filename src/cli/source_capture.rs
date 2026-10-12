@@ -129,6 +129,19 @@ pub(super) fn present_read(envelope: &Envelope, output: &mut impl Write) -> io::
         "{}",
         data["read"]["body"].as_str().unwrap_or_default()
     )?;
+    if let Some(markdown) = data["source_link"]["markdown"].as_str() {
+        let status = match data["source_link"]["status"].as_str() {
+            Some("current") => "current saved copy",
+            Some("historical") => "older saved copy",
+            Some("withdrawn") => "withdrawn",
+            _ => "saved copy",
+        };
+        writeln!(
+            output,
+            "Source: {} ({status})",
+            terminal_text(markdown, false)
+        )?;
+    }
     writeln!(
         output,
         "Source: {}  Revision: {}",
@@ -143,6 +156,24 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn source_read_displays_ready_to_copy_link_and_status() {
+        let envelope = Envelope::success(
+            "source read",
+            json!({
+                "source_id":"Source.Manual", "revision_id":"Revision.Old", "title":"Manual",
+                "read":{"body":"Exact original condition."},
+                "source_link":{"status":"historical","markdown":"[Manual](</tmp/Wiki%20notes/sources/views/saved/manual.md>)"}
+            }),
+        );
+        let mut output = Vec::new();
+        present_read(&envelope, &mut output).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("Exact original condition."));
+        assert!(text.contains(
+            "Source: [Manual](</tmp/Wiki%20notes/sources/views/saved/manual.md>) (older saved copy)"
+        ));
+    }
     #[test]
     fn preview_omits_clean_rows_without_claiming_saved_files_or_hiding_issues() {
         let mut items: Vec<_> = (0..7)

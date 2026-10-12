@@ -40,6 +40,38 @@ impl SelectedDocuments {
     pub(super) fn meter(&self) -> &Meter {
         &self.meter
     }
+    pub(crate) fn meter_mut(&mut self) -> &mut Meter {
+        &mut self.meter
+    }
+    pub(crate) fn observe_source_links(
+        &mut self,
+        catalog: &Catalog,
+        reader: &QuerySnapshot,
+    ) -> super::source_links::SourceLinkProof {
+        let reserve = self.link_reserve(reader);
+        super::source_links::SourceLinkProof::observe(
+            catalog,
+            &self.records,
+            self.documents.values(),
+            &mut self.meter,
+            reserve,
+        )
+    }
+    pub(crate) fn link_reserve(&self, reader: &QuerySnapshot) -> (usize, usize, usize) {
+        let (bytes, files, entries) = self.meter.work();
+        if let Some(observation) = reader.current_observation() {
+            let usage = observation.usage();
+            // The complete current-observation recheck is separate from the
+            // selected proof. Conservatively retain its initial input work too.
+            (
+                bytes.saturating_add(usage.io_bytes.min(usize::MAX as u64) as usize),
+                files,
+                entries.saturating_add(usage.path_steps),
+            )
+        } else {
+            (bytes, files, entries)
+        }
+    }
     pub(crate) fn read_preconditions_iter(
         &self,
     ) -> impl Iterator<Item = (&VaultRelativePath, &ExpectedState)> {

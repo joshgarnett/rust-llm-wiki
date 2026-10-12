@@ -82,7 +82,7 @@ Capture a note or folder, then ask for relevant passages:
 
 ```sh
 lwiki source capture "/absolute/path/to/Notes/project"
-lwiki context 'your question about the project' --max-bytes 6000 --max-tokens 1500
+lwiki context 'your question about the project'
 ```
 
 Replace the path and question before running the commands. Capture saves the

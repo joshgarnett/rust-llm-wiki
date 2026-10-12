@@ -129,6 +129,11 @@ pub(super) fn merge(
             a.citations.push(c.clone())
         }
     }
+    for link in &b.source_links {
+        if !a.source_links.contains(link) {
+            a.source_links.push(link.clone());
+        }
+    }
     for c in &b.contributors {
         if !a.contributors.contains(c) {
             a.contributors.push(c.clone())
@@ -377,6 +382,7 @@ pub(super) fn select(
             span,
             label: ExcerptLabel::CapturedSource,
             eligibility: evidence.eligibility,
+            source_links: Vec::new(),
             citations: if scope == ContextScope::Snapshot {
                 vec![]
             } else {

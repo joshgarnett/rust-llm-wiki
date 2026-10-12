@@ -22,6 +22,7 @@ pub struct ContextDraft {
     pub(super) truncated: bool,
     pub(super) warnings: Vec<String>,
     pub(super) selection_packet: Option<SelectionPacket>,
+    pub(super) navigation: Vec<NavigationEdge>,
 }
 impl ContextDraft {
     pub(super) fn verification_passages(&self) -> impl Iterator<Item = &ContextPassage> {
@@ -30,6 +31,35 @@ impl ContextDraft {
                 .iter()
                 .flat_map(|packet| packet.cards.iter().map(|card| &card.passage)),
         )
+    }
+    /// Re-render the same accepted evidence after optional links disappear.
+    /// No allocation, refill or citation changes occur here.
+    pub(crate) fn retain_source_links(
+        &mut self,
+        reader: &dyn QueryCatalog,
+        request: &ContextRequest,
+        links: &super::source_links::VerifiedSourceLinks,
+    ) -> Result<()> {
+        // Prepared evidence authority is independent of optional navigation.
+        if self.selection_packet.is_some() {
+            return Ok(());
+        }
+        for passage in &mut self.passages {
+            links.decorate(passage);
+        }
+        let (text, graph_bytes) = render(
+            reader,
+            request.scope,
+            &self.passages,
+            &self.bundles,
+            &self.navigation,
+        )?;
+        self.text = text;
+        self.usage.rendered_bytes = self.text.len();
+        self.usage.estimated_tokens = self.text.len().div_ceil(4);
+        self.usage.graph_bytes = graph_bytes;
+        self.usage.graph_estimated_tokens = graph_bytes.div_ceil(4);
+        Ok(())
     }
     pub fn text(&self) -> &str {
         &self.text
@@ -448,6 +478,7 @@ pub(super) fn document_passage(
         },
         eligibility: d.eligibility,
         citations,
+        source_links: Vec::new(),
         contributors: vec![],
         rank_contributions: vec![RankContribution {
             channel: "direct_document_owner".into(),
@@ -900,6 +931,13 @@ fn render(
                 "Citation ({state:?}): {}\n",
                 serde_json::to_string(c).map_err(|e| WikiError::invalid(e.to_string()))?
             ))
+        }
+        for link in &p.source_links {
+            text.push_str(&format!(
+                "Source: {} ({})\n",
+                link.markdown,
+                link.status.label()
+            ));
         }
         for c in &p.contributors {
             text.push_str(&format!(
@@ -1954,6 +1992,13 @@ pub(super) fn packet_utility(
     packet.score * relevance * density * if candidate.clipped { 0.7 } else { 1.0 }
 }
 
+fn decorate_packets(packets: &mut [Packet], links: &super::source_links::VerifiedSourceLinks) {
+    for packet in packets {
+        for passage in packet.passages.iter_mut().chain(packet.fallback.iter_mut()) {
+            links.decorate(passage);
+        }
+    }
+}
 pub(super) fn pack(
     reader: &dyn QueryCatalog,
     request: &ContextRequest,
@@ -1973,6 +2018,21 @@ pub(super) fn pack(
         dependency_fingerprint,
         evidence_sets,
     } = input;
+    // Every host candidate packet retains exactly its evidence-only authority.
+    // Navigation cannot affect candidate admission, costs or fingerprint.
+    let host_cards = matches!(
+        selection_action,
+        SelectionAction::Prepare | SelectionAction::Apply(_)
+    );
+    if host_cards || request.scope == ContextScope::Snapshot {
+        for packet in &mut packets {
+            for passage in packet.passages.iter_mut().chain(packet.fallback.iter_mut()) {
+                passage.source_links.clear();
+            }
+        }
+    } else {
+        decorate_packets(&mut packets, &signals.source_links);
+    }
     let preserve_selection_order = !matches!(selection_action, SelectionAction::Automatic);
     #[cfg(test)]
     record_candidate_ordering_trace("candidate_pool", || {
@@ -2096,6 +2156,7 @@ pub(super) fn pack(
                 truncated,
                 warnings,
                 selection_packet: Some(packet),
+                navigation: vec![],
             });
         }
         if let SelectionAction::Apply(reply) = selection_action {
@@ -2122,6 +2183,9 @@ pub(super) fn pack(
                     packet
                 })
                 .collect();
+            // Only the strict reply's selected existing packets gain navigation.
+            // Every subsequent actual rendering trial counts complete link lines.
+            decorate_packets(&mut packets, &signals.source_links);
             selection_warnings.push(format!("host selected {} of {} supplied candidates; model selection is not proof of completeness; local citations, freshness and final packing remain authoritative", ids.len(), packet.candidate_count));
             if !by_id.is_empty() || packet.omitted_candidates > 0 {
                 omissions.push(ContextOmission {
@@ -2557,6 +2621,7 @@ pub(super) fn pack(
         truncated,
         warnings,
         selection_packet: None,
+        navigation,
     })
 }
 

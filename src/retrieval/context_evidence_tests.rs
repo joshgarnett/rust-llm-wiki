@@ -73,6 +73,7 @@ impl Fixture {
             span,
             label: ExcerptLabel::CapturedSource,
             eligibility: self.document.eligibility,
+            source_links: Vec::new(),
             citations: vec![CitationRef::Source(SourceSpanRef {
                 source_id: self.document.source_id.clone().unwrap(),
                 source_revision: self.document.owner_revision.clone().unwrap(),

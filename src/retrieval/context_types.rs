@@ -26,6 +26,7 @@ pub(crate) struct ContextSelectionSignals {
     pub semantic_complete: bool,
     pub experimental_hybrid_lexical_evidence: bool,
     pub warnings: Vec<String>,
+    pub source_links: super::source_links::VerifiedSourceLinks,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -102,6 +103,30 @@ pub struct EvidenceContribution {
     pub eligibility: Eligibility,
     pub authored_status: Option<String>,
 }
+/// Observed navigation to an owned saved display. CitationRef remains evidence authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SourceReadLink {
+    pub source_id: RecordId,
+    pub revision_id: RecordId,
+    pub status: SourceReadLinkStatus,
+    pub markdown: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceReadLinkStatus {
+    Current,
+    Historical,
+    Withdrawn,
+}
+impl SourceReadLinkStatus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Current => "current saved copy",
+            Self::Historical => "older saved copy",
+            Self::Withdrawn => "withdrawn",
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ContextPassage {
     pub locator: DocumentLocator,
@@ -110,6 +135,8 @@ pub struct ContextPassage {
     pub label: ExcerptLabel,
     pub eligibility: Eligibility,
     pub citations: Vec<CitationRef>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub source_links: Vec<SourceReadLink>,
     pub contributors: Vec<EvidenceContribution>,
     pub rank_contributions: Vec<RankContribution>,
     pub support_group: Option<Blake3Hash>,

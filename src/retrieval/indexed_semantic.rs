@@ -634,11 +634,15 @@ pub(crate) fn context(
     }
     let rendered = selected_units(&proof, &discovery, state, &units)?;
     discovery.hits.dependency_fingerprint = proof.fingerprint.clone();
+    let mut links = proof.observe_source_links(catalog, &reader);
     let selected = SelectedCatalog {
         reader: &reader,
         proof: &proof,
     };
-    let mut signals = ContextSelectionSignals::default();
+    let mut signals = ContextSelectionSignals {
+        source_links: links.links.clone(),
+        ..Default::default()
+    };
     let mut evidence_sets = match context_evidence::policy() {
         context_evidence::Policy::Candidate(arm) if request.documents.limits.candidates <= 80 => {
             Some(context_evidence::Inputs::new(arm, deadline, state)?)
@@ -734,6 +738,13 @@ pub(crate) fn context(
     draft.warnings.extend(discovery.hits.warnings);
     if let Some(fault) = &options.fault {
         fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
+    }
+    if links.recheck(catalog, proof.meter_mut()) {
+        let selected = SelectedCatalog {
+            reader: &reader,
+            proof: &proof,
+        };
+        draft.retain_source_links(&selected, &request, &links.links)?;
     }
     proof.recheck(catalog, &reader)?;
     require_space(&VectorStore::open_bounded(catalog.fs(), &vectors)?, state)?;

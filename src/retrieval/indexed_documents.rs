@@ -224,6 +224,17 @@ fn context_with_held_reader(
     } else {
         proof.fingerprint.clone()
     };
+    // Optional observation may precede Apply validation, but never enters its
+    // evidence-only cards/authority. Prepare performs no optional view reads.
+    let mut links = if matches!(
+        options.selection,
+        super::context_selection_packet::SelectionAction::Prepare
+    ) {
+        super::source_links::SourceLinkProof::empty()
+    } else {
+        proof.observe_source_links(catalog, reader)
+    };
+    signals.source_links = links.links.clone();
     let selected = SelectedCatalog {
         reader,
         proof: &proof,
@@ -243,6 +254,13 @@ fn context_with_held_reader(
     }
     if let Some(fault) = &options.fault {
         fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
+    }
+    if links.recheck(catalog, proof.meter_mut()) {
+        let selected = SelectedCatalog {
+            reader,
+            proof: &proof,
+        };
+        draft.retain_source_links(&selected, &request, &links.links)?;
     }
     proof.recheck(catalog, reader)?;
     reader.check_query_budget()?;

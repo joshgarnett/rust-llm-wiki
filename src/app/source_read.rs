@@ -31,6 +31,8 @@ pub struct SourceReadOutcome {
     pub title: String,
     pub capture_state: SourceCaptureState,
     pub read: ReadOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_link: Option<crate::retrieval::SourceReadLink>,
     pub snapshot: ReadSnapshot,
     pub verification: SnapshotVerification,
     pub persistent_generation: Option<u64>,
@@ -178,6 +180,7 @@ fn format_source(
             },
             source_citation: citation,
         },
+        source_link: None,
         // Replaced by the caller only after the ordinary final proof passes.
         snapshot: snapshot.clone(),
         verification: SnapshotVerification::IndexSnapshot,
@@ -221,7 +224,7 @@ impl OfflineApp {
                 requested
             };
             let mut proof = selected_documents::authenticate(&catalog, &reader, &paths, &budget)?;
-            proof.recheck(&catalog, &reader)?;
+
             for selected in [&source, &revision] {
                 let authenticated = proof.records.get(selected.record.id()).ok_or_else(|| {
                     missing("Source or Revision envelope escaped its selected proof")
@@ -242,6 +245,10 @@ impl OfflineApp {
                 .ok_or_else(|| missing("source text escaped its selected proof"))?;
             let mut outcome =
                 format_source(&source, &revision, document, &request, reader.snapshot())?;
+            let mut links = proof.observe_source_links(&catalog, &reader);
+            links.recheck(&catalog, proof.meter_mut());
+            outcome.source_link = links.links.get(&outcome.source_id, &outcome.revision_id);
+            proof.recheck(&catalog, &reader)?;
             outcome.verification = if reader.is_current_observation() {
                 verification::verify_current_observation(&catalog, &reader, &proof)?
             } else {
@@ -253,13 +260,39 @@ impl OfflineApp {
             outcome.current_observation_unavailable = fallback;
             return Ok(outcome);
         }
-        let budget = ReadScanBudget::new(ReadScanLimits::default())?;
+        let limits = ReadScanLimits::default();
+        let budget = ReadScanBudget::new(limits)?;
         let reader = catalog.read_only_snapshot_with_budget(&budget)?;
         let (source, revision, document) = selected_target(&reader, &request)?;
         let mut outcome =
             format_source(&source, &revision, &document, &request, reader.snapshot())?;
         // The ordinary legacy snapshot includes canonical identity membership,
         // current heads, immutable ownership and exact captured content hashes.
+        // Preserve at least the complete initial scan allowance for mandatory
+        // recheck. Optional successful and failed work is charged cumulatively.
+        let (bytes, files, entries) = budget.remaining();
+        let optional = crate::retrieval::VerificationBudget {
+            max_bytes: bytes.saturating_sub(limits.max_bytes - bytes),
+            max_files: files.saturating_sub(limits.max_files - files),
+            max_entries: entries.saturating_sub(limits.max_entries - entries),
+            max_elapsed_ms: budget.remaining_time()?.as_millis().min(u64::MAX as u128) as u64,
+        };
+        let mut meter = verification::Meter::new(&optional);
+        let records = std::collections::BTreeMap::from([
+            (source.record.id().clone(), source.clone()),
+            (revision.record.id().clone(), revision.clone()),
+        ]);
+        let mut links = crate::retrieval::source_links::SourceLinkProof::observe(
+            &catalog,
+            &records,
+            [&document],
+            &mut meter,
+            (0, 0, 0),
+        );
+        links.recheck(&catalog, &mut meter);
+        outcome.source_link = links.links.get(&outcome.source_id, &outcome.revision_id);
+        let (bytes, files, entries) = meter.work();
+        budget.charge_observation(bytes, files, entries)?;
         catalog.recheck_read_snapshot(&reader, &budget)?;
         outcome.snapshot = reader.snapshot().clone();
         outcome.verification = reader.verification().clone();
