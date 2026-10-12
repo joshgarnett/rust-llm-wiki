@@ -87,6 +87,32 @@ class NativeReadQualificationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             check.json_result({**record, "stderr": "Provider network: not used"}, True)
 
+    def test_plain_human_read_keeps_exact_content_and_offline_status_on_stderr(self):
+        content = "# Captured note\nCafé 東京\nNetwork: used.\n"
+        record = {"exit": 0, "stdout": content,
+                  "stderr": "Note: sources/capture.md\nReturned text checked.\nNetwork: not used.\n"}
+        check.validate_human_read(record, content)
+
+    def test_human_read_rejects_mutated_body_and_failed_exit(self):
+        content = "Exact body\n"
+        record = {"exit": 0, "stdout": content, "stderr": "Network: not used.\n"}
+        for change in ({"exit": 1}, {"stdout": content.rstrip()},
+                       {"stdout": "Title\n" + content}, {"stdout": content + "Network: not used.\n"},
+                       {"stdout": content.replace("body", "changed body")}):
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                check.validate_human_read({**record, **change}, content)
+
+    def test_human_read_requires_one_truthful_plain_network_line(self):
+        content = "Exact body\n"
+        for stderr in ("", "Provider network: not used.\n", "Network: used.\n",
+                       "Warning: Network: not used.\n", "Network: not used. extra\n",
+                       "Network: not used.\nNetwork: not used.\n",
+                       "Network: not used.\nNetwork: used.\n",
+                       "Network: not used.\nProvider network: used.\n",
+                       "Network: not used.\nProvider network: not used.\n"):
+            with self.subTest(stderr=stderr), self.assertRaises(RuntimeError):
+                check.validate_human_read({"exit": 0, "stdout": content, "stderr": stderr}, content)
+
     def test_cli_ceiling_stops_before_dispatch(self):
         with tempfile.TemporaryDirectory() as temporary:
             runner = check.Runner(Path(temporary), {}, Path(temporary))

@@ -207,6 +207,14 @@ def validate_content(search, context, read, content):
             "partial_quote_blake3_independently_computed": False}
 
 
+def validate_human_read(record, content):
+    network_lines = [line for line in record["stderr"].splitlines()
+                     if line.startswith(("Network:", "Provider network:"))]
+    if (record["exit"] != 0 or record["stdout"] != content
+            or network_lines != ["Network: not used."]):
+        raise RuntimeError("human read did not keep exact text on stdout and network status on stderr")
+
+
 class Runner:
     def __init__(self, evidence, env, cwd):
         self.evidence, self.env, self.cwd = evidence, env, cwd
@@ -314,9 +322,7 @@ def qualify(binary, repo, evidence):
                 result["content_checks"] = validate_content(*answers, (root / CONTENT).read_bytes())
                 human = runner.run(label + "-human-read", denied(cli_command(
                     executable, root, ["read", "--path", CONTENT, "--max-bytes", "12000"], machine=False)), cli=True)
-                if (human["exit"] != 0 or human["stdout"] != (root / CONTENT).read_text()
-                        or "Provider network: not used" not in human["stderr"]):
-                    raise RuntimeError("human read did not keep exact text on stdout and network status on stderr")
+                validate_human_read(human, (root / CONTENT).read_text())
             finally:
                 after = inventory(root)
                 (evidence / (label + "-tree-after.json")).write_text(json.dumps(after, indent=2) + "\n")
