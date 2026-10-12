@@ -1,7 +1,10 @@
 //! Engine-owned sealed revision membership; graph validation cannot relax this policy.
 use super::{
     journal, operation_authority, outcome,
-    prepare::{MAX_JOURNAL_BYTES, MAX_PAYLOAD_BYTES, read_bounded, strict_json},
+    prepare::{
+        MAX_JOURNAL_BYTES, MAX_MANIFEST_BYTES, MAX_PAYLOAD_BYTES, manifest_path, read_bounded,
+        strict_json,
+    },
     types::*,
 };
 use crate::{
@@ -13,6 +16,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
 };
+
+#[path = "historical_memo.rs"]
+mod historical_memo;
+pub(super) use historical_memo::HistoricalRevisionMemo;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -255,6 +262,18 @@ impl ChangeEngine {
             self.check_competing_owners(ownership)
         })
     }
+    pub(super) fn preflight_revision_trees_memo(
+        &self,
+        permit: &WriterPermit,
+        manifest: &ChangeManifest,
+        hash: &Blake3Hash,
+        state: &JournalState,
+        memo: &HistoricalRevisionMemo,
+    ) -> Result<()> {
+        self.preflight_revision_trees_with(permit, manifest, hash, state, &|ownership| {
+            self.check_competing_owners_with_memo(ownership, Some(memo))
+        })
+    }
     fn preflight_revision_trees_with(
         &self,
         permit: &WriterPermit,
@@ -319,15 +338,16 @@ impl ChangeEngine {
         journal::require_sync(self.fs.replace(staged, &ExpectedState::Absent, permit)?)
     }
     /// Revalidate every tree's complete membership around mutations and before publication.
-    pub(crate) fn verify_revision_trees(
+    pub(super) fn verify_revision_trees_memo(
         &self,
         permit: &WriterPermit,
         manifest: &ChangeManifest,
         hash: &Blake3Hash,
         complete: bool,
+        memo: &HistoricalRevisionMemo,
     ) -> Result<()> {
         self.verify_revision_trees_with(permit, manifest, hash, complete, &|ownership| {
-            self.check_competing_owners(ownership)
+            self.check_competing_owners_with_memo(ownership, Some(memo))
         })
     }
     fn verify_revision_trees_with(
@@ -355,17 +375,54 @@ impl ChangeEngine {
         Ok(())
     }
     fn check_competing_owners(&self, current: &Ownership) -> Result<()> {
-        for id in self.change_ids()? {
+        self.check_competing_owners_with_memo(current, None)
+    }
+    fn check_competing_owners_with_memo(
+        &self,
+        current: &Ownership,
+        memo: Option<&HistoricalRevisionMemo>,
+    ) -> Result<()> {
+        let ids = self.change_ids()?;
+        #[cfg(test)]
+        super::apply::maintenance_guard_tests::hook(
+            self.fs.root(),
+            super::apply::maintenance_guard_tests::Event::HistoricalDiscovery(ids.len()),
+        )?;
+        for id in ids {
             if id == current.change.change_id {
                 continue;
             }
-            let (manifest, hash) = self.load_manifest_structure(&id)?;
-            let other_trees = tree_inventory(&manifest)?;
-            if !other_trees
-                .iter()
-                .any(|t| current.trees.iter().any(|c| key(&c.root) == key(&t.root)))
-            {
+            // Discovery and the same bounded protected read happen on every pass.
+            let bytes = read_bounded(&self.fs, &manifest_path(&id)?, MAX_MANIFEST_BYTES + 65_536)?
+                .ok_or_else(|| WikiError::invalid("missing retained manifest"))?;
+            let cached_overlap = memo.and_then(|memo| {
+                memo.overlap(self, &id, &bytes, |root| {
+                    current.trees.iter().any(|c| key(&c.root) == key(root))
+                })
+            });
+            #[cfg(test)]
+            super::apply::maintenance_guard_tests::hook(
+                self.fs.root(),
+                super::apply::maintenance_guard_tests::Event::HistoricalLookup(&id, cached_overlap),
+            )?;
+            if cached_overlap == Some(false) {
                 continue;
+            }
+            // An overlap always obtains the original manifest/hash interpretation
+            // before executing its unchanged terminal, payload and journal checks.
+            let (manifest, hash) = self.decode_manifest_structure_observed(&id, &bytes)?;
+            if cached_overlap.is_none() {
+                let other_trees = tree_inventory(&manifest)?;
+                let overlap = other_trees
+                    .iter()
+                    .any(|t| current.trees.iter().any(|c| key(&c.root) == key(&t.root)));
+                if let Some(memo) = memo {
+                    let roots = other_trees.into_iter().map(|tree| tree.root).collect();
+                    memo.remember(self, &id, bytes, roots);
+                }
+                if !overlap {
+                    continue;
+                }
             }
             let terminal = outcome::terminal_report(&self.fs, &manifest, &hash)?;
             if terminal
@@ -901,3 +958,7 @@ fn private_stage(
 #[cfg(test)]
 #[path = "immutable_indexed_tests.rs"]
 mod indexed_tests;
+
+#[cfg(test)]
+#[path = "historical_memo_tests.rs"]
+mod historical_memo_tests;

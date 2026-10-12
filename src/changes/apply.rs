@@ -1,5 +1,6 @@
 //! Forward application, whole-vault verification, and guarded publication.
 use super::{
+    immutable::HistoricalRevisionMemo,
     journal, outcome,
     prepare::{MAX_PAYLOAD_BYTES, read_bounded, topological_order},
     types::*,
@@ -88,9 +89,14 @@ impl ChangeEngine {
         let expected_scan = projected_scan(&input);
         self.retain_validation(permit, change, manifest, initial, &graph, &expected_scan)?;
         self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
-        if let Err(error) =
-            self.preflight_revision_trees(permit, manifest, &change.manifest_hash, initial)
-        {
+        let history = HistoricalRevisionMemo::new(self);
+        if let Err(error) = self.preflight_revision_trees_memo(
+            permit,
+            manifest,
+            &change.manifest_hash,
+            initial,
+            &history,
+        ) {
             return self.revision_failure(permit, manifest, &change.manifest_hash, initial, error);
         }
         self.apply_files_to_files_applied(
@@ -100,7 +106,13 @@ impl ChangeEngine {
             initial,
             &observations,
             &|complete| {
-                self.guard_revision_trees(permit, manifest, &change.manifest_hash, complete)
+                self.guard_revision_trees(
+                    permit,
+                    manifest,
+                    &change.manifest_hash,
+                    complete,
+                    &history,
+                )
             },
         )?;
         self.require_all_after(permit, manifest, &change.manifest_hash)?;
@@ -138,7 +150,7 @@ impl ChangeEngine {
             );
         }
         self.verify_dependencies(permit, manifest, &change.manifest_hash, &graph)?;
-        self.guard_revision_trees(permit, manifest, &change.manifest_hash, true)?;
+        self.guard_revision_trees(permit, manifest, &change.manifest_hash, true, &history)?;
         self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
         let authority = PublicationPermit {
             writer: permit,
@@ -154,7 +166,7 @@ impl ChangeEngine {
                 "publisher returned a snapshot outside the verified graph",
             ));
         }
-        self.guard_revision_trees(permit, manifest, &change.manifest_hash, true)?;
+        self.guard_revision_trees(permit, manifest, &change.manifest_hash, true, &history)?;
         self.require_all_after(permit, manifest, &change.manifest_hash)?;
         if document_map(&self.validation_input(manifest)?) != document_map(&final_input) {
             return self.conflict(
@@ -420,11 +432,14 @@ impl ChangeEngine {
         manifest: &ChangeManifest,
         hash: &Blake3Hash,
         complete: bool,
+        history: &HistoricalRevisionMemo,
     ) -> Result<()> {
         crate::maintenance_diagnostic::observe(
             crate::maintenance_diagnostic::Phase::RetainedAuthority,
             || {
-                if let Err(error) = self.verify_revision_trees(permit, manifest, hash, complete) {
+                if let Err(error) =
+                    self.verify_revision_trees_memo(permit, manifest, hash, complete, history)
+                {
                     let state = journal::load_journal(&self.fs, manifest, hash)?;
                     return self.revision_failure(permit, manifest, hash, &state, error);
                 }

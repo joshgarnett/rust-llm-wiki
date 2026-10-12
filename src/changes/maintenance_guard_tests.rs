@@ -1,7 +1,7 @@
 //! Reached schedules and exact applying-loop observations; disposable fixtures only.
 use super::*;
 use crate::{
-    domain::ReadSnapshot,
+    domain::{ReadSnapshot, RecordId},
     maintenance_parallel,
     vault::{VaultFs, VaultRoot},
 };
@@ -26,6 +26,8 @@ pub(crate) enum Event<'a> {
     TargetRead(&'a VaultRelativePath, Option<[u8; 32]>, usize),
     AfterJoin,
     BeforeMutation(usize),
+    HistoricalDiscovery(usize),
+    HistoricalLookup(&'a RecordId, Option<bool>),
 }
 type Hook = Arc<dyn for<'a> Fn(Event<'a>) -> Result<()> + Send + Sync>;
 static HOOKS: OnceLock<Mutex<BTreeMap<PathBuf, Hook>>> = OnceLock::new();
@@ -38,7 +40,7 @@ pub(crate) fn hook(root: &VaultRoot, event: Event<'_>) -> Result<()> {
         .cloned();
     callback.map_or(Ok(()), |callback| callback(event))
 }
-struct HookGuard(PathBuf);
+pub(crate) struct HookGuard(PathBuf);
 impl Drop for HookGuard {
     fn drop(&mut self) {
         HOOKS
@@ -48,7 +50,7 @@ impl Drop for HookGuard {
             .remove(&self.0);
     }
 }
-fn install(
+pub(crate) fn install(
     root: &VaultRoot,
     callback: impl for<'a> Fn(Event<'a>) -> Result<()> + Send + Sync + 'static,
 ) -> HookGuard {

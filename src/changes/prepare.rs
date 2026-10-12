@@ -951,7 +951,16 @@ impl ChangeEngine {
     ) -> Result<(ChangeManifest, Blake3Hash)> {
         let bytes = reader(&manifest_path(id)?, MAX_MANIFEST_BYTES + 65_536)?
             .ok_or_else(|| WikiError::invalid("missing retained manifest"))?;
-        let parsed = parse_note(&bytes);
+        self.decode_manifest_structure_observed(id, &bytes)
+    }
+    /// Interpret bytes freshly obtained by the caller's original protected read.
+    /// This grants no permission to omit that read or cache mutable journal facts.
+    pub(super) fn decode_manifest_structure_observed(
+        &self,
+        id: &RecordId,
+        bytes: &[u8],
+    ) -> Result<(ChangeManifest, Blake3Hash)> {
+        let parsed = parse_note(bytes);
         let record = parsed
             .canonical
             .as_ref()

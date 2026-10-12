@@ -199,6 +199,17 @@ Indexed apply previews check retained intent, payloads, journal/operation author
 
 Independent maintenance reads and temporary-file staging may use a command-owned joined worker pool. Every existing guard checkpoint remains; the writer reduces observations in descriptor order and owns journal, canonical replacement, directory syncing and catalog publication. A failed batch joins all admitted work before any installation. Unsupported platforms and storage initialization, recovery, pending migration or import authority scopes use the owner-sequential path.
 
+During one legacy apply call, competing-owner checks may reuse a historical
+manifest's validated revision roots only after discovering the history again and
+reading the complete note through the original protected read. Reuse requires the
+same wiki root, wiki ID, Change ID and exact note bytes. Changed bytes use the
+original decoder; overlapping roots still require fresh terminal, journal,
+payload and ownership checks. The memo retains at most 256 entries and 16 MiB of
+accounted representation, including owned capacities and allocation allowances.
+This bounds retained memo data, not process memory or transient parsing. Entries
+that do not fit use ordinary validation. Restart discards the memo, and every
+existing mutation guard and conflict boundary remains in place.
+
 For active normalized storage, workers receive a private proof of the exact layout, vault marker and migration receipt bytes fully validated by the owner. Every activation check freshly stream-authenticates all three files; workers never decode migration receipts or inherit the import memo. An authority-byte change during that phase conflicts, including a semantically equivalent edit to the vault marker or layout. Changes made before owner validation retain normal validation behavior. This narrow identity rule does not alter ordinary Page/Source editing, skip file observations or change the storage format. A mismatch is not retried against new authority within the phase.
 
 The operational journal is append-only length-framed JSON with sequence and checksum under `.wiki/state/changes/<id>.journal`. Sync each state transition; ignore only an incomplete trailing frame. The state machine is:
