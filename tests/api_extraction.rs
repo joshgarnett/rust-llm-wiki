@@ -1349,3 +1349,123 @@ fn acknowledged_generation_receipt_resumes_without_rewriting_output_or_resending
         assert_eq!(f.ledger().inspect().unwrap().state, RunState::Completed);
     }
 }
+
+// Retained responses use their original reasoning settings, including older
+// records where no reasoning effort was specified.
+#[test]
+fn changed_effort_refuses_same_retained_run_but_original_response_remains_decodable() {
+    for original_effort in [None, Some("low")] {
+        let mut f = Fixture::new();
+        let config_path = f.temp.path().join("providers.toml");
+        let omitted_config = std::fs::read_to_string(&config_path).unwrap();
+        let original_config = match original_effort {
+            None => omitted_config.clone(),
+            Some(effort) => omitted_config.replace(
+                "revision=\"r1\"",
+                &format!("revision=\"r1\"\nreasoning_effort=\"{effort}\""),
+            ),
+        };
+        std::fs::write(&config_path, &original_config).unwrap();
+        f.service = lwiki::config::providers::ProviderConfig::load(&config_path)
+            .unwrap()
+            .authorize(&f.fs, &id("vault_test"), "primary", Capability::Generate)
+            .unwrap();
+        let mock = Mock::response(f.response());
+        let attempt = retained(&f, mock.clone());
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+        let codec_path = f
+            .temp
+            .path()
+            .join(attempt.bound.codec.as_ref().unwrap().path.as_str());
+        let codec_bytes = std::fs::read(&codec_path).unwrap();
+        let codec: serde_json::Value = serde_json::from_slice(&codec_bytes).unwrap();
+        let stored = &codec["contract"];
+        if let Some(effort) = original_effort {
+            assert_eq!(stored["reasoning_effort"], effort);
+        } else {
+            assert!(stored.get("reasoning_effort").is_none());
+        }
+        let before = f.ledger().inspect().unwrap();
+        let changed_config = omitted_config.replace(
+            "revision=\"r1\"",
+            "revision=\"r1\"\nreasoning_effort=\"high\"",
+        );
+        std::fs::write(&config_path, changed_config).unwrap();
+        let changed = lwiki::config::providers::ProviderConfig::load(&config_path)
+            .unwrap()
+            .authorize(&f.fs, &id("vault_test"), "primary", Capability::Generate)
+            .unwrap();
+        let error = f
+            .app
+            .graph_extract_api(
+                &f.request,
+                &changed,
+                &f.dispatcher(mock.clone()),
+                f.options.clone(),
+            )
+            .err()
+            .expect("changed effort must not reuse an admitted Run");
+        assert_eq!(error.code, ErrorCode::FreshnessConflict);
+        assert!(error.message.contains("extraction run inputs changed"));
+        let after = f.ledger().inspect().unwrap();
+        assert_eq!(after.spec, before.spec);
+        assert_eq!(after.attempts, before.attempts);
+        assert_eq!(after.budget, before.budget);
+        assert_eq!(std::fs::read(&codec_path).unwrap(), codec_bytes);
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+
+        // Current configuration may differ; original authentic task/codec/usage
+        // remain the only authority for this retained paid response.
+        let decoded = f
+            .dispatcher(mock.clone())
+            .decode_retained(
+                &f.ledger(),
+                &changed,
+                &attempt.attempt.task_key,
+                lwiki::providers::types::DispatchPurpose::Task,
+                &attempt.attempt,
+            )
+            .unwrap();
+        let lwiki::providers::types::ValidatedOutput::Generation {
+            value,
+            returned_model,
+            ..
+        } = decoded
+        else {
+            panic!("original generation response required")
+        };
+        assert_eq!(value, f.response());
+        assert_eq!(returned_model.as_deref(), Some("test-model"));
+        assert_eq!(std::fs::read(&codec_path).unwrap(), codec_bytes);
+        let decoded_state = f.ledger().inspect().unwrap();
+        assert_eq!(decoded_state.budget, before.budget);
+        assert_eq!(decoded_state.attempts, before.attempts);
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+
+        // Restore the original private service and complete that same retained
+        // attempt. A replacement run or another provider send would fail here.
+        std::fs::write(&config_path, &original_config).unwrap();
+        let completed = f
+            .app
+            .graph_extract_api(
+                &f.request,
+                &f.service,
+                &f.dispatcher(mock.clone()),
+                f.options.clone(),
+            )
+            .unwrap();
+        assert!(completed.reused);
+        assert_eq!(completed.run_id, f.request.run_id);
+        assert!(completed.import.as_ref().unwrap().prepared.is_some());
+        let settled = f.ledger().inspect().unwrap();
+        assert_eq!(settled.attempts.len(), 1);
+        assert_eq!(settled.attempts[0].attempt, attempt.attempt);
+        assert_eq!(settled.attempts[0].phase, AttemptPhase::Settled);
+        assert_eq!(
+            settled.attempts[0].billing,
+            BillingDisposition::UnknownReserved
+        );
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(std::fs::read(codec_path).unwrap(), codec_bytes);
+    }
+}
