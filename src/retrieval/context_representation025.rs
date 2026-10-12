@@ -659,6 +659,7 @@ fn empty_draft(reader: &dyn QueryCatalog, request: &ContextRequest) -> Result<Co
     )?;
     let text = trial.text;
     Ok(ContextDraft {
+            human_text: None,
         navigation: vec![], usage:ContextUsage { rendered_bytes:text.len(),estimated_tokens:text.len().div_ceil(4),token_accounting:TokenAccounting::EstimatedUtf8BytesDiv4Ceil,
         reserved_bytes:request.budget.instruction_bytes+request.budget.output_bytes,reserved_tokens:request.budget.instruction_tokens+request.budget.output_tokens,
         graph_bytes:0,graph_estimated_tokens:0,verification_bytes:0,verification_files:0,verification_entries:0 },text,passages:vec![],bundles:vec![],omissions:vec![],

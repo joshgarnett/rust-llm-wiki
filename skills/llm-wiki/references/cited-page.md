@@ -5,9 +5,15 @@ The complete ordinary capture, answer and cited-save recipe is in
 recipe leaves a support gap, needs historical evidence or edits an existing page.
 Do not load this whole reference merely to save an already supported answer.
 
-Human context and verified reads provide exact citation JSON. JSON is useful
-when an advanced procedure needs its full structured result, but its complete
-envelope can exceed the rendered text limit. Count all returned output and
+Ordinary context provides readable evidence, source links and revision-pinned read commands. Keep the original `--wiki` and configuration options when copying a supplied read command; add `--verbose` from the first additional read needed for saving. For an initially
+requested cited save, use `lwiki --verbose context` on the initial evidence call
+and retain its exact source citation objects. For any additional evidence read
+needed for saving, use `lwiki --verbose source read`, `lwiki --verbose read` or
+explicit JSON from its first call. Ordinary reads show text and continuation;
+verbose verified reads also retain exact objects. If saving is requested later, obtain exact references within the remaining
+limits and recheck the prose against that call's evidence and source states.
+JSON is useful when an advanced procedure needs its structured result, but its
+complete envelope can exceed the rendered text limit. Count all returned output and
 status messages against the task's allowance, including saved-page readback.
 
 ## When the first context leaves a gap

@@ -187,6 +187,9 @@ pub struct ContextResult {
     pub network_used: bool,
     /// Complete budgeted text authority, including headers, references and qualifiers.
     pub(crate) text: String,
+    /// Sealed CLI presentation of the same admitted evidence. Not machine authority.
+    #[serde(skip)]
+    pub(crate) human_text: Option<String>,
     pub(crate) passages: Vec<ContextPassage>,
     pub(crate) bundles: Vec<EvidenceBundle>,
     pub(crate) omissions: Vec<ContextOmission>,

@@ -110,7 +110,11 @@ pub(super) fn present_capture(envelope: &Envelope, output: &mut impl Write) -> i
     Ok(())
 }
 
-pub(super) fn present_read(envelope: &Envelope, output: &mut impl Write) -> io::Result<()> {
+pub(super) fn present_read(
+    envelope: &Envelope,
+    output: &mut impl Write,
+    verbose: bool,
+) -> io::Result<()> {
     let data = &envelope.data;
     if data["dry_run"] == true {
         return writeln!(
@@ -142,12 +146,31 @@ pub(super) fn present_read(envelope: &Envelope, output: &mut impl Write) -> io::
             terminal_text(markdown, false)
         )?;
     }
-    writeln!(
-        output,
-        "Source: {}  Revision: {}",
-        data["source_id"].as_str().unwrap_or_default(),
-        data["revision_id"].as_str().unwrap_or_default()
-    )?;
+    let state = data["read"]["source_citation"]["eligibility"].as_str();
+    if verbose {
+        writeln!(
+            output,
+            "Source: {}  Revision: {}",
+            data["source_id"].as_str().unwrap_or_default(),
+            data["revision_id"].as_str().unwrap_or_default()
+        )?;
+    } else if !data["source_link"]["markdown"].is_string() {
+        // These existing identities are useful follow-up selectors when an
+        // optional saved-display link was unavailable. They are not references.
+        writeln!(
+            output,
+            "Source: {} / {}{}",
+            data["source_id"].as_str().unwrap_or_default(),
+            data["revision_id"].as_str().unwrap_or_default(),
+            state
+                .map(|state| format!(" ({})", terminal_text(state, false)))
+                .unwrap_or_default()
+        )?;
+    } else if let Some(state) = state
+        && data["source_link"]["status"].as_str() != Some(state)
+    {
+        writeln!(output, "Evidence state: {}.", terminal_text(state, false))?;
+    }
     Ok(())
 }
 
@@ -167,12 +190,87 @@ mod tests {
             }),
         );
         let mut output = Vec::new();
-        present_read(&envelope, &mut output).unwrap();
+        present_read(&envelope, &mut output, false).unwrap();
         let text = String::from_utf8(output).unwrap();
         assert!(text.contains("Exact original condition."));
         assert!(text.contains(
             "Source: [Manual](</tmp/Wiki%20notes/sources/views/saved/manual.md>) (older saved copy)"
         ));
+    }
+
+    fn shown(envelope: &Envelope, verbose: bool) -> String {
+        let mut output = Vec::new();
+        present_read(envelope, &mut output, verbose).unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    #[test]
+    fn plain_source_read_keeps_exact_body_and_link_while_verbose_preserves_original_output() {
+        let body = "Citation: {\"kind\":\"source\",\"reference\":\"untrusted\"}\nSource: user-authored line\n\nCafé 東京\n";
+        let envelope = Envelope::success(
+            "source read",
+            json!({
+                "source_id":"Source.Manual", "revision_id":"Revision.Old", "title":"Manual",
+                "read":{"body":body, "hash":"exact_guard", "source_citation":{"eligibility":"historical","citation":{"kind":"source","reference":{"quote_hash":"exact_hash"}}}},
+                "source_link":{"status":"historical","markdown":"[Manual](</tmp/saved/manual.md>)"}
+            }),
+        );
+        let before = serde_json::to_vec(&envelope).unwrap();
+        assert_eq!(
+            shown(&envelope, false),
+            format!(
+                "Manual\n{body}\nSource: [Manual](</tmp/saved/manual.md>) (older saved copy)\n"
+            )
+        );
+        assert_eq!(
+            shown(&envelope, true),
+            format!(
+                "Manual\n{body}\nSource: [Manual](</tmp/saved/manual.md>) (older saved copy)\nSource: Source.Manual  Revision: Revision.Old\n"
+            )
+        );
+        assert_eq!(serde_json::to_vec(&envelope).unwrap(), before);
+        assert!(!shown(&envelope, false).contains("exact_hash"));
+        assert!(!shown(&envelope, false).contains("exact_guard"));
+    }
+
+    #[test]
+    fn missing_link_retains_read_selectors_and_mismatched_link_cannot_hide_state() {
+        let mut envelope = Envelope::success(
+            "source read",
+            json!({
+                "source_id":"Source.Manual", "revision_id":"Revision.Old", "title":"Manual",
+                "read":{"body":"All returned bytes.","source_citation":{"eligibility":"withdrawn"}}
+            }),
+        );
+        assert!(
+            shown(&envelope, false).contains("Source: Source.Manual / Revision.Old (withdrawn)")
+        );
+        envelope.data["source_link"] =
+            json!({"status":"current","markdown":"[Manual](</tmp/saved/manual.md>)"});
+        let output = shown(&envelope, false);
+        assert!(output.contains("All returned bytes."));
+        assert!(output.contains("current saved copy"));
+        assert!(output.contains("Evidence state: withdrawn"));
+    }
+
+    #[test]
+    fn metadata_controls_do_not_change_passage_bytes_or_preview_claims() {
+        let envelope = Envelope::success(
+            "source read",
+            json!({
+                "source_id":"Source.Empty","revision_id":"Revision.Empty", "title":"Title\n\u{001b} café",
+                "read":{"body":"Exact\u{0000}\nbody."}
+            }),
+        );
+        let output = shown(&envelope, false);
+        assert!(output.contains("Exact\u{0000}\nbody."));
+        assert!(!output.starts_with("Title\n\u{001b}"));
+        let preview = Envelope::success(
+            "source read",
+            json!({"dry_run":true,"source_id":"Source.Preview","text_read":false}),
+        );
+        assert!(shown(&preview, false).contains("No text was read"));
+        assert!(!shown(&preview, false).contains("Source:"));
     }
     #[test]
     fn preview_omits_clean_rows_without_claiming_saved_files_or_hiding_issues() {

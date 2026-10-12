@@ -522,6 +522,7 @@ pub(super) fn seal(
     ContextResult {
         network_used: false,
         text: draft.text,
+        human_text: draft.human_text,
         passages: draft.passages,
         bundles: draft.bundles,
         omissions: draft.omissions,

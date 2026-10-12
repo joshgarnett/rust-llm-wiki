@@ -590,6 +590,7 @@ fn allocate(
         warnings.push("location allocation retained a frozen clipped prose window; complete atom coverage is not claimed".into());
     }
     Ok(context::ContextDraft {
+        human_text: None,
         navigation: vec![],
         usage: ContextUsage {
             rendered_bytes: text.len(),

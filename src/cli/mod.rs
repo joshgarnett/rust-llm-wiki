@@ -37,3 +37,9 @@ mod human_status;
 mod probe_diagnostic;
 pub mod setup;
 pub mod skill_install;
+
+mod context_status;
+pub use context_status::present_context_status;
+
+mod read_status;
+pub use read_status::present_read_status;

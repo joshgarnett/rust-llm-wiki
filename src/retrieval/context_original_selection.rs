@@ -595,6 +595,7 @@ pub(super) fn context(
         )?
     } else {
         ContextDraft {
+            human_text: None,
             navigation: vec![],
             text: String::new(),
             passages: Vec::new(),

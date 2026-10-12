@@ -1961,7 +1961,7 @@ fn execute_selected(
                     selection: selection.clone(),
                     ..Default::default()
                 };
-                let (result, automatic) = super::automatic_embeddings::lookup(
+                let (mut result, automatic) = super::automatic_embeddings::lookup(
                     &app,
                     &remote_context,
                     &context.search.remote,
@@ -1994,6 +1994,7 @@ fn execute_selected(
                 envelope.meta.network_used = result.network_used;
                 envelope.meta.partial = result.truncated();
                 envelope.warnings.extend(result.warnings().iter().cloned());
+                envelope.context_human_text = result.human_text.take();
                 envelope.data = value(result)?;
                 super::automatic_embeddings::attach(&mut envelope, automatic, lexical);
                 finish_read_health(
@@ -2048,7 +2049,7 @@ fn execute_selected(
                     .push("context and freshness are unknown during dry-run".into());
             } else {
                 let mut local_generation = None;
-                let result = if matches!(
+                let mut result = if matches!(
                     request.documents.mode,
                     retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
                 ) || request
@@ -2167,6 +2168,7 @@ fn execute_selected(
                 }
                 envelope.meta.partial = result.truncated();
                 envelope.warnings.extend(result.warnings().iter().cloned());
+                envelope.context_human_text = result.human_text.take();
                 envelope.data = value(result)?;
                 if cached_dry_run {
                     envelope
@@ -3545,7 +3547,7 @@ fn present_inner(
             super::source_capture::present_capture(envelope, output)
         }
         OutputFormat::Human if envelope.ok && envelope.command == "source read" => {
-            super::source_capture::present_read(envelope, output)
+            super::source_capture::present_read(envelope, output, verbose)
         }
         OutputFormat::Human
             if envelope.ok
@@ -3669,7 +3671,14 @@ fn present_inner(
             write!(
                 output,
                 "{}",
-                envelope.data["text"].as_str().unwrap_or_default()
+                if verbose {
+                    envelope.data["text"].as_str().unwrap_or_default()
+                } else {
+                    envelope
+                        .context_human_text
+                        .as_deref()
+                        .unwrap_or_else(|| envelope.data["text"].as_str().unwrap_or_default())
+                }
             )
         }
         OutputFormat::Human

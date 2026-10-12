@@ -27,10 +27,14 @@ For passages that help answer a question:
 lwiki context 'What did we decide about the release?'
 ```
 
-Context returns text and citations. It does not write an answer. Give the text
-to your agent, or read it yourself. A source citation identifies a saved note
-version and the exact quoted passage. Check that the passage supports the claim,
-including any conditions or exceptions.
+Context returns readable passages, source states and links to saved notes when
+available. Give the text to your agent, or read it yourself. Check that each
+passage supports the claim, including any conditions or exceptions.
+
+When you want your agent to save a cited answer, start with
+`lwiki --verbose context 'YOUR QUESTION'`. This includes exact reference objects
+that identify the saved note version and quoted passage. Your final answer can
+still use readable source links. Use `--json` when you need the structured result.
 
 Search and context have output limits, so they can omit useful facts. If a fact
 is missing, search for its wording, narrow to the relevant source, or read more
@@ -83,9 +87,10 @@ Increase both context bounds when you need more text:
 lwiki --offline context 'What steps and exceptions apply?' --max-bytes 12000 --max-tokens 3000
 ```
 
-The first bound reached limits the result. Tokens are estimated from byte size;
-your agent may count them differently. Read warnings and omissions as well as
-the passages. If using JSON, `data.text` is the rendered evidence; the full
+The first limit reached determines how much text is returned. These limits
+include exact references; ordinary readable output uses no more space. Tokens
+are estimated from byte size, so your agent may count them differently. Read
+warnings and omissions as well as the passages. If using JSON, `data.text` is the rendered evidence; the full
 response also includes metadata and may repeat passages.
 
 Check warnings before treating a result as current. If a lookup says newer notes
@@ -98,19 +103,26 @@ date and status before using it to describe the present.
 
 ## Read an exact captured range
 
-Read a saved source using the ID returned by capture:
+For more text from a result, copy its `Read: lwiki source read ...` command. It
+opens the same saved version without another search. Keep the original `--wiki`
+and configuration options.
+
+You can also read a saved source using the ID returned by capture:
 
 ```sh
 lwiki --offline source read SOURCE_ID --max-bytes 12000
 ```
 
-This returns its saved text and a citation. For an earlier copy, add
+This returns its saved text, source state and a link when available. Add
+`--verbose` before `source read` when you need the exact reference objects to
+save a cited page. For an earlier copy, add
 `--revision REVISION_ID` using a returned revision ID. To continue a long read,
 follow the returned `--start` instruction and keep that revision fixed. Each
 range has its own citation. `read --id SOURCE_ID` reads source metadata rather
 than the saved text.
 
-Copy the payload path and byte range returned by search or context:
+For an exact range, use the payload path and byte positions from
+`--verbose context` or structured `--json search` output:
 
 ```sh
 lwiki --offline --json read --path 'RETURNED_PAYLOAD_PATH' --start START --end END --max-bytes 4096
@@ -221,16 +233,19 @@ when ordinary context is insufficient.
 ## Open a saved source
 
 Cited context and `source read` can show a `Source:` Markdown link beside the
-returned text. Copy that link into your answer or open it to inspect the saved
-copy. Its label tells you whether it is the current copy, an older copy or a
-withdrawn source. Older links open the copy used by the citation.
+returned text. Copy the link into your answer or open it to inspect the saved
+copy. The label tells you whether it is the current copy, an older copy or a
+withdrawn source. For more text, use the supplied `Read: lwiki source read ...`
+command. It opens the same saved version. Keep the original `--wiki` and
+configuration options. Older links open the copy used by the citation.
 
 The JSON output provides the same ready-to-copy link in `source_link.markdown`
-for `source read`, or `source_links` on each context passage. Keep the exact
-citation when saving evidence to a Page. A link helps you open a note; the
+for `source read`, or `source_links` on each context passage. Use
+`--verbose context` or `--verbose source read` to keep the exact citation when
+saving a cited page. A link helps you open a note; the
 citation identifies the exact saved text.
 
 If the generated copy is missing or has been edited, the command can still return
-the captured text and citation without a link. Use `source read SOURCE_ID` with
-the cited `--revision REVISION_ID` to inspect that text. These links refer to
+the captured text and citation without a link. Context keeps its supplied read
+command when the link is absent. These links refer to
 files in your local wiki; another computer needs its own local copy.

@@ -1,6 +1,9 @@
 use clap::Parser;
 use lwiki::{
-    cli::{Arguments, OutputFormat, execute, human_warning, present, present_detailed},
+    cli::{
+        Arguments, OutputFormat, execute, human_warning, present, present_context_status,
+        present_detailed, present_read_status,
+    },
     output::Envelope,
 };
 use serde_json::json;
@@ -100,10 +103,24 @@ fn main() {
         ),
     };
     if format == OutputFormat::Human {
-        if matches!(
-            envelope.command.as_str(),
-            "read" | "source read" | "context" | "inspect"
-        ) && let Some(selection) = &envelope.meta.selection
+        let plain_context = envelope.command == "context" && !args.verbose;
+        let plain_read =
+            matches!(envelope.command.as_str(), "read" | "source read") && !args.verbose;
+        let plain_evidence = plain_context || plain_read;
+        if plain_context {
+            if present_context_status(&envelope, &mut io::stderr().lock()).is_err() {
+                std::process::exit(1);
+            }
+        }
+        if plain_read && present_read_status(&envelope, &mut io::stderr().lock()).is_err() {
+            std::process::exit(1);
+        }
+        if !plain_evidence
+            && matches!(
+                envelope.command.as_str(),
+                "read" | "source read" | "context" | "inspect"
+            )
+            && let Some(selection) = &envelope.meta.selection
         {
             eprintln!(
                 "Wiki: {} ({}, selected by {})",
@@ -112,7 +129,8 @@ fn main() {
                 selection["origin"].as_str().unwrap_or("unknown")
             );
         }
-        if envelope.ok
+        if !plain_read
+            && envelope.ok
             && matches!(
                 envelope.command.as_str(),
                 "read" | "source read" | "inspect"
@@ -152,7 +170,11 @@ fn main() {
                 }
             }
         }
-        if envelope.ok && envelope.command == "context" && envelope.data["text"].is_string() {
+        if !plain_context
+            && envelope.ok
+            && envelope.command == "context"
+            && envelope.data["text"].is_string()
+        {
             if let Some(packet) = envelope.data["selection_packet"].as_object() {
                 eprintln!(
                     "Selection task: {} candidate cards, not final context. Save the host agent's ID-only reply, then repeat this request with --selection FILE.",
@@ -183,10 +205,12 @@ fn main() {
                 }
             }
         }
-        if matches!(
-            envelope.command.as_str(),
-            "read" | "source read" | "context"
-        ) && let Some(freshness) = &envelope.meta.freshness
+        if !plain_evidence
+            && matches!(
+                envelope.command.as_str(),
+                "read" | "source read" | "context"
+            )
+            && let Some(freshness) = &envelope.meta.freshness
         {
             eprintln!(
                 "Freshness: {freshness}{}",
@@ -199,6 +223,9 @@ fn main() {
             );
         }
         for warning in &envelope.warnings {
+            if plain_evidence {
+                continue;
+            }
             if envelope.command == "search" {
                 if let Some(warning) = human_warning(warning, args.verbose) {
                     eprintln!("Warning: {warning}");
@@ -207,7 +234,10 @@ fn main() {
                 eprintln!("Warning: {warning}");
             }
         }
-        if envelope.meta.partial && !matches!(envelope.command.as_str(), "search" | "read") {
+        if !plain_evidence
+            && envelope.meta.partial
+            && !matches!(envelope.command.as_str(), "search" | "read")
+        {
             eprintln!(
                 "Partial output: inspect the reported omissions and retained work before continuing."
             );
@@ -243,7 +273,16 @@ fn main() {
     }
     if format == OutputFormat::Human {
         eprintln!(
-            "Provider network: {}.",
+            "{}: {}.",
+            if matches!(
+                envelope.command.as_str(),
+                "context" | "read" | "source read"
+            ) && !args.verbose
+            {
+                "Network"
+            } else {
+                "Provider network"
+            },
             if envelope.meta.network_used {
                 "used"
             } else {

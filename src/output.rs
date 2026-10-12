@@ -8,6 +8,9 @@ pub struct Envelope {
     pub command: String,
     pub ok: bool,
     pub data: Value,
+    /// Private presentation channel; JSON and JSONL retain the canonical result.
+    #[serde(skip)]
+    pub(crate) context_human_text: Option<String>,
     pub meta: Metadata,
     pub warnings: Vec<String>,
     pub error: Option<ErrorOutput>,
@@ -53,6 +56,7 @@ impl Envelope {
             command: command.into(),
             ok: true,
             data,
+            context_human_text: None,
             meta: Metadata::default(),
             warnings: Vec::new(),
             error: None,
@@ -65,6 +69,7 @@ impl Envelope {
             command: command.into(),
             ok: false,
             data: Value::Null,
+            context_human_text: None,
             meta: Metadata::default(),
             warnings: Vec::new(),
             error: Some(ErrorOutput {

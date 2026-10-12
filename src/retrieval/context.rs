@@ -11,8 +11,12 @@ use crate::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "context_human.rs"]
+mod human;
+
 pub struct ContextDraft {
     pub(super) text: String,
+    pub(super) human_text: Option<String>,
     pub(super) passages: Vec<ContextPassage>,
     pub(super) bundles: Vec<EvidenceBundle>,
     pub(super) omissions: Vec<ContextOmission>,
@@ -47,13 +51,22 @@ impl ContextDraft {
         for passage in &mut self.passages {
             links.decorate(passage);
         }
-        let (text, graph_bytes) = render(
+        let (text, graph_bytes, observed) = render_observed(
             reader,
             request.scope,
             &self.passages,
             &self.bundles,
             &self.navigation,
+            true,
         )?;
+        self.human_text = Some(human::render(
+            request.scope,
+            &self.passages,
+            &self.bundles,
+            &self.navigation,
+            &observed,
+            text.len(),
+        )?);
         self.text = text;
         self.usage.rendered_bytes = self.text.len();
         self.usage.estimated_tokens = self.text.len().div_ceil(4);
@@ -885,6 +898,18 @@ fn render(
     bundles: &[EvidenceBundle],
     navigation: &[NavigationEdge],
 ) -> Result<(String, usize)> {
+    render_observed(reader, scope, passages, bundles, navigation, false)
+        .map(|(text, graph_bytes, _)| (text, graph_bytes))
+}
+
+fn render_observed(
+    reader: &dyn QueryCatalog,
+    scope: ContextScope,
+    passages: &[ContextPassage],
+    bundles: &[EvidenceBundle],
+    navigation: &[NavigationEdge],
+    observe: bool,
+) -> Result<(String, usize, human::ObservedStates)> {
     #[cfg(test)]
     CONTEXT_RENDER_COUNTS.with(|counter| -> Result<()> {
         if let Some(mut state) = counter.get() {
@@ -912,6 +937,7 @@ fn render(
         _ => String::new(),
     };
     let mut graph_bytes = 0;
+    let mut observed = human::ObservedStates::default();
     for (i, p) in passages.iter().enumerate() {
         let start = text.len();
         text.push_str(&format!(
@@ -925,12 +951,19 @@ fn render(
         if let Some(r) = &p.locator.record {
             text.push_str(&format!("Record: {} ({})\n", r.record_id, r.expected_kind))
         }
+        let mut citation_states = Vec::new();
         for c in &p.citations {
             let state = citation_state(reader, c)?;
+            if observe {
+                citation_states.push(state);
+            }
             text.push_str(&format!(
                 "Citation ({state:?}): {}\n",
                 serde_json::to_string(c).map_err(|e| WikiError::invalid(e.to_string()))?
             ))
+        }
+        if observe {
+            observed.citations.push(citation_states);
         }
         for link in &p.source_links {
             text.push_str(&format!(
@@ -953,6 +986,7 @@ fn render(
     }
     for b in bundles {
         let start = text.len();
+        let mut path_states = Vec::new();
         let path_labels = b
             .path
             .iter()
@@ -960,6 +994,9 @@ fn render(
                 let row = reader
                     .record(&step.assertion.record_id)?
                     .ok_or_else(|| WikiError::invalid("assertion path record missing"))?;
+                if observe {
+                    path_states.push((row.eligibility, row.authored_status.clone()));
+                }
                 Ok(format!(
                     "{}: {:?}, status {:?}",
                     step.assertion.record_id, row.eligibility, row.authored_status
@@ -967,6 +1004,9 @@ fn render(
             })
             .collect::<Result<Vec<_>>>()?
             .join("; ");
+        if observe {
+            observed.paths.push(path_states);
+        }
         text.push_str(&format!("[assertion {}; {:?}; status {:?}; disputed {}]\n{} {} {}\nQualifiers: {}\nPath: {}\nPath states: {}\nPassages: {:?}; omitted support {}; omitted contradiction {}\n\n",b.assertion.record_id,b.eligibility,b.authored_status,b.disputed,b.subject.record_id,b.predicate,serde_json::to_string(&b.object).map_err(|e|WikiError::invalid(e.to_string()))?,serde_json::to_string(&b.qualifiers).map_err(|e|WikiError::invalid(e.to_string()))?,serde_json::to_string(&b.path).map_err(|e|WikiError::invalid(e.to_string()))?,path_labels,b.passage_indices,b.omitted_support,b.omitted_contradictions));
         graph_bytes += text.len() - start
     }
@@ -997,7 +1037,7 @@ fn render(
             counter.set(Some(state));
         }
     });
-    Ok((text, graph_bytes))
+    Ok((text, graph_bytes, observed))
 }
 
 #[cfg(test)]
@@ -1045,6 +1085,7 @@ pub(crate) fn render_documents_for_test(
 /// The document allocator's exact admission authority. Callers supply original
 /// proposal membership; coalesced output is never used to remove an origin.
 pub(super) struct DocumentTrial {
+    observed_states: human::ObservedStates,
     pub passages: Vec<ContextPassage>,
     pub text: String,
     pub counts: BTreeMap<String, usize>,
@@ -1090,7 +1131,7 @@ pub(super) fn document_trial(
     }
     bundles::coalesce(&mut next, reader)?;
     compact_direct_citations(&mut next);
-    let (text, _) = render(reader, request.scope, &next, &[], &[])?;
+    let (text, _, observed_states) = render_observed(reader, request.scope, &next, &[], &[], true)?;
     let mut counts = BTreeMap::new();
     for passage in &next {
         *counts.entry(bundles::owner(passage)).or_insert(0usize) += 1;
@@ -1120,6 +1161,7 @@ pub(super) fn document_trial(
         None
     };
     Ok(DocumentTrial {
+        observed_states,
         passages: next,
         text,
         counts,
@@ -2064,8 +2106,14 @@ pub(super) fn pack(
     let mut accepted_lineage_ids = Vec::new();
     let mut bundles: Vec<EvidenceBundle> = Vec::new();
     let mut navigation: Vec<NavigationEdge> = Vec::new();
-    let (mut text, mut graph_bytes) =
-        render(reader, request.scope, &passages, &bundles, &navigation)?;
+    let (mut text, mut graph_bytes, mut observed_states) = render_observed(
+        reader,
+        request.scope,
+        &passages,
+        &bundles,
+        &navigation,
+        true,
+    )?;
     if text.len() > available_bytes || text.len().div_ceil(4) > available_tokens {
         return Err(WikiError::new(
             ErrorCode::BudgetExceeded,
@@ -2135,6 +2183,7 @@ pub(super) fn pack(
             let truncated =
                 hits.truncated || !omissions.is_empty() || packet.omitted_candidates > 0;
             return Ok(ContextDraft {
+                human_text: None,
                 text: String::new(),
                 passages: vec![],
                 bundles: vec![],
@@ -2224,6 +2273,7 @@ pub(super) fn pack(
                 if let Some(state) = state {
                     passages = state.passages;
                     text = state.text;
+                    observed_states = state.observed_states;
                 }
                 for (origin, packet) in packets.iter().enumerate() {
                     if let Some(choice) = choices.iter().find(|choice| choice.origin == origin) {
@@ -2338,6 +2388,7 @@ pub(super) fn pack(
             next_navigation,
             rendered,
             next_graph,
+            next_observed_states,
             _bytes,
             _tokens,
             _graph_tokens,
@@ -2363,6 +2414,7 @@ pub(super) fn pack(
                 Vec::new(),
                 trial.text,
                 0,
+                trial.observed_states,
                 bytes,
                 bytes.div_ceil(4),
                 0,
@@ -2419,12 +2471,13 @@ pub(super) fn pack(
             for p in &next {
                 *counts.entry(bundles::owner(p)).or_insert(0usize) += 1
             }
-            let (rendered, next_graph) = render(
+            let (rendered, next_graph, next_observed_states) = render_observed(
                 reader,
                 request.scope,
                 &next,
                 &next_bundles,
                 &next_navigation,
+                true,
             )?;
             let bytes = rendered.len();
             let tokens = bytes.div_ceil(4);
@@ -2459,6 +2512,7 @@ pub(super) fn pack(
                 next_navigation,
                 rendered,
                 next_graph,
+                next_observed_states,
                 bytes,
                 tokens,
                 graph_tokens,
@@ -2569,6 +2623,7 @@ pub(super) fn pack(
         navigation = next_navigation;
         text = rendered;
         graph_bytes = next_graph;
+        observed_states = next_observed_states;
     }
     #[cfg(test)]
     record_lineage_event("final_accepted", || {
@@ -2599,7 +2654,16 @@ pub(super) fn pack(
         || graph.is_some_and(|g| g.truncated);
     let rendered_bytes = text.len();
     let estimated_tokens = rendered_bytes.div_ceil(4);
+    let human_text = Some(human::render(
+        request.scope,
+        &passages,
+        &bundles,
+        &navigation,
+        &observed_states,
+        rendered_bytes,
+    )?);
     Ok(ContextDraft {
+        human_text,
         text,
         passages,
         bundles,
@@ -2704,3 +2768,7 @@ mod hybrid_lexical_evidence_experiment_tests {
 #[cfg(test)]
 #[path = "context_representation025.rs"]
 pub(crate) mod representation025;
+
+#[cfg(test)]
+#[path = "context_human_tests.rs"]
+mod context_human_tests;

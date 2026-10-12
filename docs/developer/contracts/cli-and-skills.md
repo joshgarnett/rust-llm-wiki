@@ -265,6 +265,52 @@ JSONL supports long-running commands only. Each line has `schema_version`, invoc
 
 Stderr is for concise diagnostics/progress. With JSON/JSONL, it never carries a second machine protocol. Human output prioritizes matched paths, readable excerpts, provenance, changes made, unresolved issues, and a useful next command. `read` human mode can emit Markdown; `--json` wraps the record and requested body during an actual read. Dry-run instead returns the supplied selector, requested range, effective byte bound and requested mode, with null body/citation and explicit unperformed target/range/verification checks. It does not resolve the target or open the catalog; human output describes the plan. Missing targets remain unverified rather than failing a request preview.
 
+Ordinary `context` human stdout is a separately sealed presentation of all
+admitted evidence, in the canonical order, with supplied source links and
+independently observed citation states. Each distinct source/revision pair within
+a passage has a supplied `lwiki source read SOURCE --revision REVISION --max-bytes 4000`
+action grouped under its readable labels. It uses existing wiki selection, with
+one explicit instruction to retain the original wiki/configuration options; it
+does not change the default. Missing optional links retain the same action. It
+preserves passage text byte for byte,
+including repeated passages and instruction-like lines. Graph output retains
+assertions, objects, qualifiers, contributing stances, directed path states,
+omitted evidence counts and navigation's lack of an asserted relationship.
+`--verbose context` emits the unchanged canonical `data.text`, including exact
+citation objects. `--json` keeps the unchanged complete envelope. Preparation
+always emits the exact selector task before either context presentation branch.
+
+The private presentation channel is omitted from serialized results and envelopes.
+Canonical text remains the packing authority: `usage.rendered_bytes`, token
+estimates, graph accounting and reservations describe that text, not human stdout
+length. Human metadata uses at most the corresponding canonical space, with an
+internal final-length check. Metadata savings never admit or refill evidence.
+Optional source-link removal regenerates both presentations for the same evidence.
+Complete stdout, stderr and host framing remain separately chargeable to any
+external task allowance. Saving requires the exact returned source objects from
+verbose context or verified reads; a display link is not citation authority.
+
+Ordinary `source read` human stdout preserves its title, exact returned body and
+verified saved-copy link/state. When no display link is available it retains
+source/revision identities as usable follow-up selectors. The independently
+observed evidence state remains explicit if it differs from the display state.
+Ordinary `read` stdout remains the exact returned body. Their concise stderr
+keeps selected wiki, verification scope, byte range, requested-range completeness,
+unknown/actionable warnings and complete continuation commands. Plain source-read
+continuation replaces only its completely recognized old generated warning with
+a copyable `lwiki source read` command that retains the returned revision, start,
+requested end and original cap. Its serialized/verbose warning is unchanged.
+Both reads explicitly retain the original wiki/configuration options.
+Source continuations stay fixed to the returned revision even when a link exists.
+A complete explicit subrange does not claim whole-source EOF.
+
+`--verbose read` and `--verbose source read` retain raw path/hash edit guards and
+exact source reference objects on stderr; verbose source-read stdout retains the
+original source/revision lines. JSON remains unchanged. A cited-save workflow
+requests verbose or structured output on its first additional evidence read,
+counts all output, and copies the exact objects for those actual returned ranges.
+No body or range is trimmed and presentation introduces no read or provider work.
+
 ## Error and exit contract
 
 | Exit | Error family/examples | Caller behavior |
