@@ -501,7 +501,13 @@ fn serialized_envelope_verbose_refs_and_prepare_task_are_compatible() {
         "revision_current",
         "Immutable cited support.\n",
     );
-    let (canonical, human) = rendered(&reader, ContextScope::Current, &[passage.clone()], &[], &[]);
+    let (canonical, human) = rendered(
+        &reader,
+        ContextScope::Current,
+        std::slice::from_ref(&passage),
+        &[],
+        &[],
+    );
     let mut result = ContextResult {
         network_used: false,
         text: canonical.clone(),

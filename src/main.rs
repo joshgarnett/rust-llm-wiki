@@ -107,10 +107,8 @@ fn main() {
         let plain_read =
             matches!(envelope.command.as_str(), "read" | "source read") && !args.verbose;
         let plain_evidence = plain_context || plain_read;
-        if plain_context {
-            if present_context_status(&envelope, &mut io::stderr().lock()).is_err() {
-                std::process::exit(1);
-            }
+        if plain_context && present_context_status(&envelope, &mut io::stderr().lock()).is_err() {
+            std::process::exit(1);
         }
         if plain_read && present_read_status(&envelope, &mut io::stderr().lock()).is_err() {
             std::process::exit(1);
