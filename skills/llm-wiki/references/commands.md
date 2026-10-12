@@ -1625,6 +1625,9 @@ Options:
 
           [possible values: human, json, jsonl]
 
+      --markdown-only
+          Capture only Markdown files (.md or .markdown), including inside folders
+
       --json
           Emit one structured JSON envelope
 

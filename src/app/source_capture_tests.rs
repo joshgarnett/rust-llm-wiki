@@ -50,8 +50,179 @@ impl Fixture {
             .capture_sources(SourceCaptureRequest {
                 paths: vec![self.notes.clone()],
                 files_from: None,
+                markdown_only: false,
             })
             .unwrap()
+    }
+}
+
+#[test]
+fn markdown_only_explicit_list_and_folder_preview_capture_repeat_preserve_originals() {
+    for normalized in [false, true] {
+        for mode in 0..3 {
+            let fixture = Fixture::new(normalized, 0);
+            let originals = [
+                ("One.MD", "# One\nOriginal first fact.\n"),
+                ("Two.MaRkDoWn", "# Two\nOriginal second fact.\n"),
+                ("Three.TXT", "An excluded text file.\n"),
+                ("Four.bin", "An excluded attachment.\n"),
+            ];
+            for (name, bytes) in originals {
+                fs::write(fixture.notes.join(name), bytes).unwrap();
+            }
+            let list = fixture._temp.path().join("files.txt");
+            fs::write(
+                &list,
+                originals
+                    .iter()
+                    .map(|(name, _)| format!("{}/{name}\n", fixture.notes.display()))
+                    .collect::<String>(),
+            )
+            .unwrap();
+            let request = SourceCaptureRequest {
+                paths: match mode {
+                    0 => originals
+                        .iter()
+                        .map(|(name, _)| fixture.notes.join(name))
+                        .collect(),
+                    1 => vec![],
+                    _ => vec![fixture.notes.clone()],
+                },
+                files_from: (mode == 1).then_some(list),
+                markdown_only: true,
+            };
+            let preview_app = OfflineApp::new(
+                fixture.app.fs.clone(),
+                OperationOptions {
+                    dry_run: true,
+                    ..options()
+                },
+            )
+            .unwrap();
+            let lock = fixture.app.fs.root().path().join(".wiki/state/writer.lock");
+            let before_lock = fs::read(&lock).unwrap();
+            let before_changes = fixture.app.engine().unwrap().change_ids().unwrap();
+            let preview = preview_app.capture_sources(request.clone()).unwrap();
+            assert!(!preview.partial, "{:#?}", preview.items);
+            assert!(preview.dry_run);
+            assert_eq!(preview.totals.planned, 2);
+            assert_eq!(preview.totals.skipped, 2);
+            assert_eq!(preview.groups_committed, 0);
+            assert!(preview.items.iter().all(|item| {
+                item.source_id.is_none() && item.revision_id.is_none() && item.citation.is_none()
+            }));
+            assert_eq!(fs::read(lock).unwrap(), before_lock);
+            assert_eq!(
+                fixture.app.engine().unwrap().change_ids().unwrap(),
+                before_changes
+            );
+            let first = fixture.app.capture_sources(request.clone()).unwrap();
+            assert!(!first.partial, "{:#?}", first.items);
+            assert_eq!(first.totals.captured, 2);
+            assert_eq!(first.totals.skipped, 2);
+            assert_eq!(first.groups_committed, 1);
+            assert_eq!(first.changed_owner_ids.len(), 2);
+            let changes = fixture.app.engine().unwrap().change_ids().unwrap();
+            let second = fixture.app.capture_sources(request).unwrap();
+            assert!(!second.partial, "{:#?}", second.items);
+            assert_eq!(second.totals.unchanged, 2);
+            assert_eq!(second.totals.skipped, 2);
+            assert_eq!(second.groups_committed, 0);
+            assert!(second.changed_owners.is_empty());
+            assert_eq!(fixture.app.engine().unwrap().change_ids().unwrap(), changes);
+            let view = source_view(&fixture.app).unwrap();
+            assert_eq!(origin_lookup(&view).unwrap().len(), 2);
+            for item in first
+                .items
+                .iter()
+                .filter(|item| item.action == SourceCaptureAction::Captured)
+            {
+                let repeated = second
+                    .items
+                    .iter()
+                    .find(|other| other.input == item.input)
+                    .unwrap();
+                assert_eq!(repeated.source_id, item.source_id);
+                assert_eq!(repeated.revision_id, item.revision_id);
+                view.verify(
+                    &item.citation.as_ref().unwrap().citation,
+                    CitationScope::Current,
+                )
+                .unwrap();
+            }
+            for (name, bytes) in originals {
+                assert_eq!(
+                    fs::read(fixture.notes.join(name)).unwrap(),
+                    bytes.as_bytes()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn markdown_only_missing_original_check_ignores_remembered_non_markdown_files() {
+    for normalized in [false, true] {
+        let fixture = Fixture::new(normalized, 0);
+        let names = ["One.MaRkDoWn", "Two.TXT", "Three.bin"];
+        for name in names {
+            fs::write(fixture.notes.join(name), "Exact retained original.\n").unwrap();
+        }
+        let initial = fixture
+            .app
+            .capture_sources(SourceCaptureRequest {
+                paths: names.iter().map(|name| fixture.notes.join(name)).collect(),
+                files_from: None,
+                markdown_only: false,
+            })
+            .unwrap();
+        assert_eq!(initial.totals.captured, 3);
+        fs::remove_file(fixture.notes.join("Two.TXT")).unwrap();
+        fs::remove_file(fixture.notes.join("Three.bin")).unwrap();
+        let filtered_request = SourceCaptureRequest {
+            paths: vec![fixture.notes.clone()],
+            files_from: None,
+            markdown_only: true,
+        };
+        let filtered = fixture
+            .app
+            .capture_sources(filtered_request.clone())
+            .unwrap();
+        assert!(!filtered.partial, "{:#?}", filtered.items);
+        assert_eq!(filtered.items.len(), 1);
+        assert_eq!(filtered.totals.unchanged, 1);
+        assert_eq!(filtered.totals.failed, 0);
+        let default = fixture.capture();
+        assert!(default.partial);
+        assert_eq!(default.totals.failed, 2);
+        assert_eq!(default.totals.unchanged, 1);
+        assert!(
+            default
+                .items
+                .iter()
+                .filter(|item| item.error.is_some())
+                .all(|item| {
+                    item.reason.as_deref() == Some("missing_original") && item.source_id.is_some()
+                })
+        );
+        fs::remove_file(fixture.notes.join("One.MaRkDoWn")).unwrap();
+        let missing_markdown = fixture.app.capture_sources(filtered_request).unwrap();
+        assert!(missing_markdown.partial);
+        assert_eq!(missing_markdown.items.len(), 1);
+        assert_eq!(missing_markdown.totals.failed, 1);
+        assert_eq!(
+            missing_markdown.items[0].reason.as_deref(),
+            Some("missing_original")
+        );
+        let view = source_view(&fixture.app).unwrap();
+        assert_eq!(origin_lookup(&view).unwrap().len(), 3);
+        for item in initial.items.iter().filter(|item| item.citation.is_some()) {
+            view.verify(
+                &item.citation.as_ref().unwrap().citation,
+                CitationScope::Current,
+            )
+            .unwrap();
+        }
     }
 }
 
@@ -139,6 +310,7 @@ fn own_wiki_repeat_preserves_editor_bytes_and_accounts_for_missing_original() {
     let request = SourceCaptureRequest {
         paths: vec![root.to_path_buf()],
         files_from: None,
+        markdown_only: false,
     };
     let first = fixture.app.capture_sources(request.clone()).unwrap();
     assert_eq!(first.totals.captured, 1);
@@ -208,6 +380,7 @@ fn preview_never_publishes_ids_citations_or_writer_state() {
         .capture_sources(SourceCaptureRequest {
             paths: vec![fixture.notes.clone()],
             files_from: None,
+            markdown_only: false,
         })
         .unwrap();
     assert_eq!(outcome.totals.planned, 3);
@@ -262,7 +435,8 @@ fn ambiguous_absolute_and_relative_legacy_origins_are_never_guessed() {
             .app
             .capture_sources(SourceCaptureRequest {
                 paths: vec![path],
-                files_from: None
+                files_from: None,
+                markdown_only: false,
             })
             .unwrap_err()
             .code,
@@ -289,6 +463,7 @@ fn concurrent_capture_of_one_new_original_allocates_one_source() {
                 app.capture_sources(SourceCaptureRequest {
                     paths: vec![notes],
                     files_from: None,
+                    markdown_only: false,
                 })
                 .unwrap()
             })
@@ -373,6 +548,7 @@ fn selected_source_edit_after_lookup_refuses_the_group_without_overwriting_it() 
             std::slice::from_ref(&fixture.notes),
             None,
             fixture.app.fs.root().path(),
+            false,
             CaptureInputLimits::default(),
         )
         .unwrap();

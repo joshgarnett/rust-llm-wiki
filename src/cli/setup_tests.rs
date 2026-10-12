@@ -166,9 +166,11 @@ fn creates_persistent_real_wiki_and_rerun_preserves_identity_and_notes() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|step| step
-                .as_str()
-                .is_some_and(|text| text.contains("your-note.md")))
+            .any(|step| {
+                step.as_str().is_some_and(|text| {
+                    text.contains("source capture '/absolute/path/to/your-notes'")
+                })
+            })
     );
 }
 
@@ -602,6 +604,12 @@ fn agent_next_steps_explain_session_restart() {
         "Restart your codex session so it can find the installed llm-wiki instructions."
     );
     assert!(steps[1].starts_with("Ask codex:"));
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.contains("--offline source capture"))
+    );
+    assert!(!steps.iter().any(|step| step.contains("source add")));
 }
 
 #[test]

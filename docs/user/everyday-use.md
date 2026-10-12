@@ -59,8 +59,9 @@ lwiki source capture "/absolute/path/to/Notes/project"
 
 Use either command, or give several file and folder paths to one capture command.
 Folders are searched recursively for Markdown and plain-text notes. Capture
-leaves originals unchanged and prints source IDs, citation status and a summary
-of saved files. Read a saved note with its ID:
+leaves originals unchanged and prints a summary of saved files. Add
+`--markdown-only` to leave out plain-text files and other attachments.
+Read a saved note using a source ID returned by capture or lookup:
 
 ```sh
 lwiki source read SOURCE_ID --max-bytes 12000

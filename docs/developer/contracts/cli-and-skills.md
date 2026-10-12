@@ -73,7 +73,7 @@ use each command's `--help` for its arguments.
 | `read --id ID` or `read --path PATH` | Record metadata and bounded body; optional byte range on verified UTF-8 boundaries. Dry-run returns only a request plan. |
 | `page put --file FILE` | Create a page; `--if-match HASH` required to replace an existing page |
 | `page rename ID --to PATH --if-match HASH` | Changeset updating the path and known incoming links; ID preserved |
-| `source capture PATH... [--files-from FILE]` | Capture or refresh local notes in grouped publications; return Source IDs and exact citations |
+| `source capture PATH... [--files-from FILE] [--markdown-only]` | Capture or refresh local notes in grouped publications; return Source IDs and exact citations |
 | `source read ID [--revision REV]` | Read current or historical captured text directly by Source ID, with exact citation and continuation |
 | `source add FILE` | Capture immutable bytes and normalized text for supported local formats |
 | `source import prepare/run/resume/status` | Freeze a local JSONL list, publish bounded shared-change groups and retain progress/mappings |
@@ -108,6 +108,11 @@ use each command's `--help` for its arguments.
 selection includes visible regular `.md`, `.markdown` and `.txt` files; links,
 hidden directories, managed wiki trees and managed canonical notes are excluded.
 Explicit files retain the existing supported/unsupported extraction behavior.
+`--markdown-only` restricts explicit files, list entries and folder members to
+`.md` and `.markdown`, without regard to ASCII letter case. It also restricts
+remembered missing-original checks to those extensions. Other regular files are
+reported as skipped; traversal, symlink and input limits still apply. Omitting the
+flag preserves the selection behavior above.
 Selection freezes deterministic original bytes/hashes before publication, deduplicates
 overlapping paths and reports excluded inputs and errors.
 

@@ -2,7 +2,7 @@ use super::*;
 use std::fs;
 
 fn observe(paths: Vec<PathBuf>, wiki: &Path) -> CaptureInputs {
-    observe_inputs(&paths, None, wiki, CaptureInputLimits::default()).unwrap()
+    observe_inputs(&paths, None, wiki, false, CaptureInputLimits::default()).unwrap()
 }
 
 #[test]
@@ -46,6 +46,66 @@ fn deterministic_overlap_dedup_hidden_types_and_lexical_aliases() {
     );
     let dot = observe(vec![notes.join(".")], &temp.path().join("wiki"));
     assert_eq!(dot.files.len(), 3);
+}
+
+#[test]
+fn markdown_only_filters_explicit_list_and_folder_with_ascii_case_insensitive_extensions() {
+    let temp = tempfile::tempdir().unwrap();
+    let notes = temp.path().join("notes");
+    fs::create_dir(&notes).unwrap();
+    let names = [
+        "one.Md",
+        "two.mArKdOwN",
+        "three.TXT",
+        "four.bin",
+        "five.md.txt",
+        "six",
+    ];
+    for name in names {
+        fs::write(notes.join(name), name).unwrap();
+    }
+    let list = temp.path().join("files.txt");
+    fs::write(&list, names.map(|name| format!("notes/{name}\n")).concat()).unwrap();
+    let wiki = temp.path().join("wiki");
+    for mode in 0..3 {
+        let paths = match mode {
+            0 => names.iter().map(|name| notes.join(name)).collect(),
+            1 => vec![],
+            _ => vec![notes.clone()],
+        };
+        let files_from = (mode == 1).then_some(list.as_path());
+        let filtered = observe_inputs(
+            &paths,
+            files_from,
+            &wiki,
+            true,
+            CaptureInputLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(filtered.files.len(), 2, "mode={mode}");
+        assert!(
+            filtered
+                .files
+                .iter()
+                .all(|input| is_markdown_path(&input.origin))
+        );
+        assert_eq!(filtered.issues.len(), 4, "mode={mode}");
+        assert!(filtered.issues.iter().all(|issue| {
+            issue.skipped && issue.reason == "file_type" && issue.error.is_none()
+        }));
+        for input in &filtered.files {
+            assert_eq!(fs::read(&input.origin).unwrap(), input.request.original);
+        }
+        let default = observe_inputs(
+            &paths,
+            files_from,
+            &wiki,
+            false,
+            CaptureInputLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(default.files.len(), if mode == 2 { 4 } else { 6 });
+    }
 }
 
 #[test]
@@ -97,6 +157,7 @@ fn path_list_resolves_from_its_folder_and_input_recheck_rejects_changed_bytes() 
         &[],
         Some(&list),
         &temp.path().join("wiki"),
+        false,
         CaptureInputLimits::default(),
     )
     .unwrap();
@@ -125,6 +186,7 @@ fn selection_limits_refuse_before_returning_any_publishable_inputs() {
             std::slice::from_ref(&notes),
             None,
             &temp.path().join("wiki"),
+            false,
             limits
         )
         .err()
@@ -141,6 +203,7 @@ fn selection_limits_refuse_before_returning_any_publishable_inputs() {
             std::slice::from_ref(&notes),
             None,
             &temp.path().join("wiki"),
+            false,
             limits
         )
         .err()
@@ -148,6 +211,39 @@ fn selection_limits_refuse_before_returning_any_publishable_inputs() {
         .code,
         ErrorCode::BudgetExceeded
     );
+}
+
+#[test]
+fn markdown_filter_still_bounds_traversal_and_selected_original_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let notes = temp.path().join("notes");
+    fs::create_dir(&notes).unwrap();
+    fs::write(notes.join("one.MD"), "exact original").unwrap();
+    fs::write(notes.join("two.TXT"), "excluded original").unwrap();
+    for limits in [
+        CaptureInputLimits {
+            max_entries: 2,
+            ..Default::default()
+        },
+        CaptureInputLimits {
+            max_total_bytes: 5,
+            ..Default::default()
+        },
+    ] {
+        assert_eq!(
+            observe_inputs(
+                std::slice::from_ref(&notes),
+                None,
+                &temp.path().join("wiki"),
+                true,
+                limits,
+            )
+            .err()
+            .unwrap()
+            .code,
+            ErrorCode::BudgetExceeded
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -176,4 +272,25 @@ fn directory_symlinks_are_never_followed_and_explicit_links_fail() {
     assert_eq!(explicit.issues.len(), 1);
     assert!(!explicit.issues[0].skipped);
     assert!(explicit.issues[0].error.is_some());
+    let filtered = observe_inputs(
+        &[notes.clone(), notes.join("broken.md"), notes.join("linked")],
+        None,
+        &temp.path().join("wiki"),
+        true,
+        CaptureInputLimits::default(),
+    )
+    .unwrap();
+    assert!(filtered.files.is_empty());
+    assert!(filtered.issues.iter().any(|issue| {
+        issue.input_path == notes.join("broken.md")
+            && issue.reason == "symlink"
+            && !issue.skipped
+            && issue.error.is_some()
+    }));
+    assert!(filtered.issues.iter().any(|issue| {
+        issue.input_path == notes.join("linked")
+            && issue.reason == "symlink"
+            && !issue.skipped
+            && issue.error.is_some()
+    }));
 }

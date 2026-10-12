@@ -15,6 +15,7 @@ pub mod remote;
 pub mod skill_export;
 
 pub mod interrupt;
+mod page_init;
 pub mod research;
 mod source_capture;
 pub mod source_import;

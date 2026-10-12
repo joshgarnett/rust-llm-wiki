@@ -86,8 +86,9 @@ lwiki context 'your question about the project' --max-bytes 6000 --max-tokens 15
 ```
 
 Replace the path and question before running the commands. Capture saves the
-chosen files and prints their source IDs and citation status. It searches folders
-recursively. Repeat the same command after editing your notes: it refreshes
+chosen files and prints a summary. It searches folders recursively for Markdown
+and plain-text notes. Add `--markdown-only` to capture just Markdown files.
+Repeat the same command after editing your notes: it refreshes
 changed files, adds new ones and reuses unchanged copies.
 
 Context prints passages and citations rather than an answer. Read them yourself

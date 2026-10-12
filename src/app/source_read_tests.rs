@@ -27,6 +27,7 @@ fn fixture(normalized: bool) -> (tempfile::TempDir, OfflineApp, PathBuf, RecordI
         .capture_sources(SourceCaptureRequest {
             paths: vec![original.clone()],
             files_from: None,
+            markdown_only: false,
         })
         .unwrap();
     let id = captured.items[0].source_id.clone().unwrap();
@@ -68,6 +69,7 @@ fn source_id_read_returns_exact_current_then_history_without_writer_changes() {
         app.capture_sources(SourceCaptureRequest {
             paths: vec![original],
             files_from: None,
+            markdown_only: false,
         })
         .unwrap();
         let current = app.read_source(request(&id, None, 1024)).unwrap();
@@ -146,6 +148,7 @@ fn empty_and_unsupported_capture_never_return_a_fabricated_citation() {
         .capture_sources(SourceCaptureRequest {
             paths: vec![empty, binary],
             files_from: None,
+            markdown_only: false,
         })
         .unwrap();
     assert_eq!(outcome.totals.captured, 2);

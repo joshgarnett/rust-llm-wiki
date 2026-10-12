@@ -40,6 +40,21 @@ impl Fixture {
     fn raw(&self, cwd: &Path, args: &[&str], xdg: Option<&str>) -> Output {
         self.command(cwd, xdg).args(args).output().unwrap()
     }
+    fn human(&self, cwd: &Path, args: &[&str]) -> Output {
+        let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+            .current_dir(cwd)
+            .env("HOME", &self.home)
+            .env_remove("XDG_CONFIG_HOME")
+            .args(["--offline"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert!(!output.stdout.contains(&0x1b));
+        assert!(!output.stderr.contains(&0x1b));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Provider network: not used."));
+        output
+    }
     fn invoke(&self, cwd: &Path, args: &[&str], xdg: Option<&str>) -> (i32, Value) {
         let output = self.raw(cwd, args, xdg);
         assert!(
@@ -500,4 +515,203 @@ fn default_registration_failure_reports_initialized_wiki_and_exact_retry() {
         None,
     );
     fixture.ok(&fixture.base, &["wiki", "show"], None);
+}
+
+#[test]
+fn human_markdown_capture_answer_and_cited_save_preserve_evidence_and_actual_destination() {
+    let fixture = Fixture::new();
+    let (wiki, wiki_id) = fixture.init("Working notes", true);
+    let originals = fixture.base.join("Chosen notes");
+    fs::create_dir(&originals).unwrap();
+    let original = "# Orchard handover\n\nThe north orchard gate closes at dusk. Keep the blue key with café staff.\n";
+    fs::write(originals.join("01-orchard.MD"), original).unwrap();
+    for (name, body) in [
+        (
+            "02-paint.markdown",
+            "Use green paint for the workshop door.\n",
+        ),
+        (
+            "03-delivery.md",
+            "Tuesday deliveries use the west loading bay.\n",
+        ),
+        (
+            "04-tools.MARKDOWN",
+            "Put the spare wrench in the workshop cabinet.\n",
+        ),
+        ("05-seeds.md", "Store seeds in a dry cupboard.\n"),
+        (
+            "attachment.txt",
+            "An unrelated plain-text attachment must stay outside this capture.\n",
+        ),
+    ] {
+        fs::write(originals.join(name), body).unwrap();
+    }
+    let unchanged_originals = snapshot(&originals);
+    let capture_args = [
+        "source",
+        "capture",
+        originals.to_str().unwrap(),
+        "--markdown-only",
+    ];
+    let capture = fixture.human(&wiki, &capture_args);
+    let summary = String::from_utf8_lossy(&capture.stdout);
+    assert!(
+        summary.contains("Captured 5; refreshed 0; unchanged 0; skipped 1; failed 0."),
+        "{summary}"
+    );
+    assert!(summary.contains("Capture scope: Markdown files"));
+    assert!(summary.contains("2 more files saved."));
+    assert!(summary.contains("attachment.txt: skipped"));
+    assert!(!summary.contains("Repeat with --format json"));
+    let saved_sources = snapshot(&wiki.join("sources"));
+    let repeat = fixture.human(&wiki, &capture_args);
+    assert!(
+        String::from_utf8_lossy(&repeat.stdout)
+            .contains("Captured 0; refreshed 0; unchanged 5; skipped 1; failed 0.")
+    );
+    assert_eq!(snapshot(&wiki.join("sources")), saved_sources);
+    assert_eq!(snapshot(&originals), unchanged_originals);
+
+    let context = fixture.human(
+        &wiki,
+        &[
+            "context",
+            "north orchard gate",
+            "--max-bytes",
+            "6000",
+            "--max-tokens",
+            "1500",
+        ],
+    );
+    let evidence = String::from_utf8(context.stdout.clone()).unwrap();
+    let status = String::from_utf8_lossy(&context.stderr);
+    assert!(evidence.contains("closes at dusk"), "{evidence}");
+    assert!(evidence.contains("café staff"));
+    assert!(status.contains(&wiki_id));
+    assert!(status.contains("Freshness:"));
+    let citations: Vec<Value> = evidence
+        .lines()
+        .filter(|line| line.starts_with("Citation ("))
+        .map(|line| serde_json::from_str(line.split_once(": ").unwrap().1).unwrap())
+        .filter(|citation: &Value| citation["kind"] == "source")
+        .collect();
+    assert!(!citations.is_empty(), "{evidence}");
+    for citation in &citations {
+        let reference = &citation["reference"];
+        let start = reference["span"]["start"].as_u64().unwrap() as usize;
+        let end = reference["span"]["end"].as_u64().unwrap() as usize;
+        assert!(end > start && end <= original.len());
+        assert_eq!(
+            reference["quote_hash"],
+            format!(
+                "blake3:{}",
+                blake3::hash(&original.as_bytes()[start..end]).to_hex()
+            )
+        );
+    }
+    let source = citations[0]["reference"]["source_id"].as_str().unwrap();
+    let revision = citations[0]["reference"]["source_revision"]
+        .as_str()
+        .unwrap();
+    let read = fixture.human(&wiki, &["source", "read", source, "--max-bytes", "40"]);
+    let read_status = String::from_utf8_lossy(&read.stderr);
+    assert!(read_status.contains(&wiki_id));
+    assert!(read_status.contains("Freshness:"));
+    assert!(read_status.contains("truncated: true"));
+    assert_eq!(read_status.matches("More text is available.").count(), 1);
+    let read_citation: Value = serde_json::from_str(
+        read_status
+            .lines()
+            .find(|line| line.starts_with("Source citation ("))
+            .unwrap()
+            .split_once("): ")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    assert_eq!(read_citation["reference"]["source_id"], source);
+    assert_eq!(read_citation["reference"]["source_revision"], revision);
+    let read_body = original.as_bytes().get(..40).unwrap();
+    assert_eq!(
+        read_citation["reference"]["quote_hash"],
+        format!("blake3:{}", blake3::hash(read_body).to_hex())
+    );
+
+    let body = fixture.base.join("answer.md");
+    let refs = fixture.base.join("refs.json");
+    fs::write(
+        &body,
+        "The north orchard gate closes at dusk. Keep the blue key with café staff.\n",
+    )
+    .unwrap();
+    fs::write(
+        &refs,
+        serde_json::to_vec(&json!({"schema_version":"1","citations":citations})).unwrap(),
+    )
+    .unwrap();
+    let saved = fixture.human(
+        &wiki,
+        &[
+            "page",
+            "init",
+            "--file",
+            body.to_str().unwrap(),
+            "--title",
+            "Orchard handover answer",
+            "--source-refs",
+            refs.to_str().unwrap(),
+        ],
+    );
+    let completion = String::from_utf8_lossy(&saved.stdout);
+    assert!(completion.contains("Draft saved."), "{completion}");
+    assert!(completion.contains("verified for this proposal: true"));
+    let path = completion
+        .lines()
+        .find_map(|line| line.strip_prefix("Page path: "))
+        .unwrap();
+    let id = completion
+        .lines()
+        .find_map(|line| line.strip_prefix("Page ID: "))
+        .unwrap();
+    assert!(id.starts_with("page_"));
+    let saved_bytes = fs::read(wiki.join(path)).unwrap();
+    let parsed = lwiki::records::parse_note(&saved_bytes).canonical.unwrap();
+    assert_eq!(parsed.id().as_str(), id);
+    assert_eq!(parsed.fields()["wiki_status"], "draft");
+    let readback = fixture.human(&wiki, &["read", "--path", path, "--max-bytes", "8000"]);
+    let page = String::from_utf8(readback.stdout.clone()).unwrap();
+    assert!(page.contains("café staff"));
+    assert!(page.contains("Source status checked when this page was saved."));
+    assert!(page.contains("<!-- lwiki:source-citations:v1 end -->"));
+    assert!(!String::from_utf8_lossy(&readback.stderr).contains("Read is truncated"));
+    let machine_refs = page
+        .split("\n<!--\n")
+        .nth(1)
+        .unwrap()
+        .split("\n-->\n")
+        .next()
+        .unwrap();
+    let retained_refs: Value = serde_json::from_str(machine_refs).unwrap();
+    assert_eq!(retained_refs["citations"], json!(citations));
+    for line in page.lines().filter(|line| line.contains("](")) {
+        let link = line.split("](").nth(1).unwrap().split(')').next().unwrap();
+        let target = url::Url::from_file_path(wiki.join(path))
+            .unwrap()
+            .join(link)
+            .unwrap()
+            .to_file_path()
+            .unwrap();
+        assert!(target.is_file(), "missing saved citation link: {link}");
+    }
+    // This small public regression is not the frozen independent acceptance fixture.
+    // Include every returned byte, even the retry and truncated-read diagnostics.
+    let total: usize = [&capture, &repeat, &context, &read, &saved, &readback]
+        .iter()
+        .map(|output| output.stdout.len() + output.stderr.len())
+        .sum();
+    assert!(
+        total <= 24_000,
+        "small public workflow returned {total} bytes"
+    );
+    assert_eq!(snapshot(&originals), unchanged_originals);
 }

@@ -1511,7 +1511,7 @@ fn next_steps(
     } else {
         result.push("Connect your agent later by rerunning setup with --agent codex, --agent sagex, --agent claude-code or --agent cursor.".into());
     }
-    result.push(format!("Capture one of your notes: {prefix} --offline source add '/absolute/path/to/your-note.md' --title 'Your note title'"));
+    result.push(format!("Capture one of your notes or a folder: {prefix} --offline source capture '/absolute/path/to/your-notes'"));
     result.push(format!(
         "Find its facts: {prefix} --offline context 'your question about that note'"
     ));

@@ -100,8 +100,10 @@ fn main() {
         ),
     };
     if format == OutputFormat::Human {
-        if matches!(envelope.command.as_str(), "read" | "context" | "inspect")
-            && let Some(selection) = &envelope.meta.selection
+        if matches!(
+            envelope.command.as_str(),
+            "read" | "source read" | "context" | "inspect"
+        ) && let Some(selection) = &envelope.meta.selection
         {
             eprintln!(
                 "Wiki: {} ({}, selected by {})",
@@ -111,22 +113,37 @@ fn main() {
             );
         }
         if envelope.ok
-            && matches!(envelope.command.as_str(), "read" | "inspect")
-            && let Some(hash) = envelope.data["hash"].as_str()
+            && matches!(
+                envelope.command.as_str(),
+                "read" | "source read" | "inspect"
+            )
         {
-            eprintln!(
-                "Record: {}\nHash (for --if-match): {hash}",
-                envelope.data["path"].as_str().unwrap_or_default()
-            );
-            if let Some(citation) = envelope.data["source_citation"].as_object() {
+            let read = if envelope.command == "source read" {
+                &envelope.data["read"]
+            } else {
+                &envelope.data
+            };
+            if let Some(hash) = read["hash"].as_str() {
                 eprintln!(
-                    "Source citation ({}): {}",
-                    citation
-                        .get("eligibility")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unknown"),
-                    citation.get("citation").unwrap_or(&serde_json::Value::Null)
+                    "Record: {}\nHash (for --if-match): {hash}",
+                    read["path"].as_str().unwrap_or_default()
                 );
+                if let Some(citation) = read["source_citation"].as_object() {
+                    eprintln!(
+                        "Source citation ({}): {}",
+                        citation
+                            .get("eligibility")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("unknown"),
+                        citation.get("citation").unwrap_or(&serde_json::Value::Null)
+                    );
+                }
+                if envelope.command == "source read" {
+                    eprintln!(
+                        "Read bytes {}..{}; truncated: {}.",
+                        read["range"]["start"], read["range"]["end"], read["truncated"]
+                    );
+                }
             }
         }
         if envelope.ok && envelope.command == "context" && envelope.data["text"].is_string() {
@@ -160,8 +177,10 @@ fn main() {
                 }
             }
         }
-        if matches!(envelope.command.as_str(), "read" | "context")
-            && let Some(freshness) = &envelope.meta.freshness
+        if matches!(
+            envelope.command.as_str(),
+            "read" | "source read" | "context"
+        ) && let Some(freshness) = &envelope.meta.freshness
         {
             eprintln!(
                 "Freshness: {freshness}{}",

@@ -702,7 +702,7 @@ fn malformed_epoch_maximum_lengths_refuse_before_io_without_overflow() {
 }
 
 #[test]
-fn initialization_allows_empty_managed_directories_but_not_missing_marker_history() {
+fn initialization_uses_readable_layout_and_missing_marker_preserves_retained_history() {
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path().join("new-vault");
     lwiki::app::offline::init(
@@ -714,14 +714,25 @@ fn initialization_allows_empty_managed_directories_but_not_missing_marker_histor
     let vault = VaultFs::new(VaultRoot::explicit(&target).unwrap());
     assert_eq!(
         storage::inventory(&vault, &opts(1)).unwrap().layout_version,
-        1
+        3
     );
     let writer = WriterPermit::acquire(vault.root(), Duration::ZERO).unwrap();
-    write_change(&vault, &writer, "page.md", b"retained history".to_vec());
+    let change = write_change(&vault, &writer, "page.md", b"retained history".to_vec());
+    let retained = vault.root().resolve(&rel("changes")).unwrap();
+    assert_eq!(retained, vault.root().path().join(".wiki/retained/changes"));
+    let history = retained.join(change.change_id.as_str()).join("change.md");
+    let history_before = fs::read(&history).unwrap();
+    let authority = target.join(".wiki/state/storage/layout.json");
+    let authority_before = fs::read(&authority).unwrap();
     fs::remove_file(target.join("WIKI.md")).unwrap();
+    let error = vault.root().resolve(&rel("changes")).unwrap_err();
+    assert_eq!(error.code, ErrorCode::RecordInvalid);
+    assert_eq!(error.message, "storage vault marker missing");
+    assert_eq!(fs::read(history).unwrap(), history_before);
+    assert_eq!(fs::read(authority).unwrap(), authority_before);
     assert_eq!(
-        vault.root().resolve(&rel("changes")).unwrap_err().code,
-        ErrorCode::RecoveryRequired
+        fs::read(target.join("page.md")).unwrap(),
+        b"retained history"
     );
 }
 

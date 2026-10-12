@@ -96,9 +96,16 @@ pub(super) fn present(
         )
     )?;
     if data["provider_configuration"]["present"] == false {
+        let optional_ambient = data["provider_configuration"]["origin"] == "ambient"
+            && data["selected_profile"].is_null();
         writeln!(
             output,
-            "Provider settings file is missing. Run lwiki setup to add a model."
+            "{}",
+            if optional_ambient {
+                "No API model configured. Capture and word search work without one."
+            } else {
+                "Provider settings file is missing. Restore the selected file or run lwiki setup to choose a model."
+            }
         )?;
     }
     if let Some(message) = data["provider_configuration"]["location_error"]["message"].as_str() {

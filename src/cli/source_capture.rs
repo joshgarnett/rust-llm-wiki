@@ -14,6 +14,9 @@ pub(super) fn present_capture(envelope: &Envelope, output: &mut impl Write) -> i
         return Ok(());
     }
     let totals = &data["totals"];
+    if data["markdown_only"] == true {
+        writeln!(output, "Capture scope: Markdown files (.md, .markdown).")?;
+    }
     if data["dry_run"] == true {
         writeln!(
             output,
@@ -43,11 +46,13 @@ pub(super) fn present_capture(envelope: &Envelope, output: &mut impl Write) -> i
             if action == "unchanged" && !issue {
                 continue;
             }
-            if !issue && shown >= 20 {
+            if !issue && shown >= 3 {
                 hidden += 1;
                 continue;
             }
-            shown += 1;
+            if !issue {
+                shown += 1;
+            }
             write!(
                 output,
                 "{}: {}",
@@ -83,10 +88,17 @@ pub(super) fn present_capture(envelope: &Envelope, output: &mut impl Write) -> i
         }
     }
     if hidden > 0 {
-        writeln!(
-            output,
-            "{hidden} more files saved. Repeat with --format json to list every source and citation."
-        )?;
+        if data["dry_run"] == true {
+            writeln!(
+                output,
+                "{hidden} more files planned. No files were changed."
+            )?;
+        } else {
+            writeln!(
+                output,
+                "{hidden} more files saved. Ask a question with lwiki context to read matching text and citations."
+            )?;
+        }
     }
     if totals["not_attempted"].as_u64().unwrap_or(0) > 0 {
         writeln!(
@@ -123,8 +135,33 @@ pub(super) fn present_read(envelope: &Envelope, output: &mut impl Write) -> io::
         data["source_id"].as_str().unwrap_or_default(),
         data["revision_id"].as_str().unwrap_or_default()
     )?;
-    for warning in &envelope.warnings {
-        writeln!(output, "{}", terminal_text(warning, false))?;
-    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn preview_omits_clean_rows_without_claiming_saved_files_or_hiding_issues() {
+        let mut items: Vec<_> = (0..7)
+            .map(|index| json!({"input":format!("note-{index}.md"),"action":"planned"}))
+            .collect();
+        items.push(json!({"input":"unreadable.md","action":"failed","error":{"message":"cannot read input"}}));
+        let envelope = Envelope::success(
+            "source capture",
+            json!({
+                "dry_run":true,"markdown_only":true,"totals":{"planned":7},"items":items
+            }),
+        );
+        let mut output = Vec::new();
+        present_capture(&envelope, &mut output).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("4 more files planned. No files were changed."));
+        assert!(!text.contains("files saved"));
+        assert!(!text.contains("ready to cite"));
+        assert!(text.contains("unreadable.md: failed\n  cannot read input"));
+        assert!(text.contains("Capture scope: Markdown files"));
+    }
 }

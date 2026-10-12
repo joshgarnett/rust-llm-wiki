@@ -346,6 +346,9 @@ pub enum SourceCommand {
         /// Read one path per line, relative to this list's folder.
         #[arg(long)]
         files_from: Option<PathBuf>,
+        /// Capture only Markdown files (.md or .markdown), including inside folders.
+        #[arg(long)]
+        markdown_only: bool,
     },
     /// Read a captured source and get a citation for the returned text.
     Read {

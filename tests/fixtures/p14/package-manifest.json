@@ -74,14 +74,14 @@
     "migrate"
   ],
   "files": {
-    "SKILL.md": "e98fad70060f729512e619cafb8d45a3d9564d8dc3d1d1f056059853027d280d",
+    "SKILL.md": "d5eafc53fc316f890f949d0498214177d29471efa4cece0407dd34f484bb4d3d",
     "agents/openai.yaml": "307ad222dc5d27d563d54b0a0466264fd035378ce2d103bcbf8de4ed2ea1b144",
-    "references/cited-page.md": "55057dc5a73a711a85d85fb5c80bd1aec50c05140d73197bc1d7654e6c0b8f9f",
-    "references/commands.md": "42424ba34a4f9c6d6fbf28956ca31ddf10b88ea667bf3a70b814ce022796cce6",
+    "references/cited-page.md": "a09493f2fe488a19dd6dcd6284876afe2ee29734762162f0d5c670a91c71561c",
+    "references/commands.md": "ec62204fe12ff3c8f9c8b0929ea469220852a0b07200438a81fef63a473c4cf2",
     "references/examples.json": "c9e5471d1b1506317c140e37f051145d5017e6ef077e7350f771468f88eb6d89",
-    "references/workflows.md": "6f5874bc42225de9613e512af81f39cf24623d324bac3ddf0193edb40aa5c84a"
+    "references/workflows.md": "60b54ae15d0ea8b16729b24647ed0926a5e241f95456df03dccd50f9dd68e747"
   },
-  "package_checksum": "362ea76109f864e0d27a517cf7e644fa28ac71020da44558e0783e8682941dec",
+  "package_checksum": "91e6b3ec7d70d93c1d2007617c413829e0ac7e04fba0c44daccee3a8d8a9868a",
   "schema": "lwiki.skill-manifest.v1",
   "schemas": [
     "context-original-selection",

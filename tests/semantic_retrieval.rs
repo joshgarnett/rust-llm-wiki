@@ -1949,7 +1949,7 @@ fn corrupted_settled_receipt_cannot_publish_staged_vectors() {
     let ledger = JobLedger::new(f.fs.clone(), f.app.vault_id().clone(), run, options()).unwrap();
     let inspection = ledger.inspect().unwrap();
     let reference = inspection.attempts[0].receipt.as_ref().unwrap();
-    let path = f.fs.root().path().join(reference.path.as_str());
+    let path = f.fs.root().resolve(&reference.path).unwrap();
     let original = std::fs::read(&path).unwrap();
     let mut altered = original.clone();
     altered.extend_from_slice(b"\nchanged receipt\n");

@@ -15,7 +15,9 @@ use crate::{
     sources::{
         CitationScope, SourceCaptureState, SourceInputReads, SourcePlan, SourceRefreshLimits,
         SourceStore, SourceView,
-        capture_inputs::{CaptureInputLimits, ObservedCaptureInput, observe_inputs},
+        capture_inputs::{
+            CaptureInputLimits, ObservedCaptureInput, is_markdown_path, observe_inputs,
+        },
     },
     vault::{ExpectedState, VaultFs, WriterPermit},
 };
@@ -44,6 +46,8 @@ struct CaptureGroupOutcome {
 pub struct SourceCaptureRequest {
     pub paths: Vec<PathBuf>,
     pub files_from: Option<PathBuf>,
+    /// Restrict regular-file selection to ASCII case-insensitive .md/.markdown extensions.
+    pub markdown_only: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -401,6 +405,7 @@ impl OfflineApp {
             &request.paths,
             request.files_from.as_deref(),
             self.fs.root().path(),
+            request.markdown_only,
             CaptureInputLimits::default(),
         )?;
         let mut outcome = SourceCaptureOutcome {
@@ -502,6 +507,7 @@ impl OfflineApp {
         // Account for remembered originals only under explicitly selected folders.
         for (origin, bound) in &origins {
             if !selected.contains(origin)
+                && (!request.markdown_only || is_markdown_path(origin))
                 && inputs
                     .directories
                     .iter()

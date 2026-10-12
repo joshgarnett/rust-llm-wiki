@@ -1,48 +1,14 @@
-# Answer a question and save a cited note
+# Advanced cited answers and edits
 
-Start with `lwiki --json context 'QUESTION'`. Read the returned text, citations,
-warnings and omissions. Answer only the conditions that this evidence supports,
-and state any remaining gaps. This command chooses the supported default scope
-for the selected wiki; no layout preview or capabilities check is needed first.
-Keep the user's chosen wiki as described in [../SKILL.md](../SKILL.md).
+The complete ordinary capture, answer and cited-save recipe is in
+[../SKILL.md](../SKILL.md). Read only the relevant section below when that
+recipe leaves a support gap, needs historical evidence or edits an existing page.
+Do not load this whole reference merely to save an already supported answer.
 
-When the user asks to save the answer:
-
-1. Write the supported answer as plain Markdown in `BODY.md` outside the wiki.
-   Keep citations tied to the claims they support and include any unresolved gaps.
-2. Write `REFS.json` outside the wiki with `schema_version` equal to `"1"` and a
-   `citations` array containing the exact returned citation objects whose `kind`
-   is `source`. Use the objects unchanged. A verified captured-text read can also
-   supply `data.read.source_citation.citation` from `source read`, or
-   `data.source_citation.citation` from a payload-path `read`. Capture supplies
-   each saved item's `data.items[].citation`; read that source before using its
-   text to support claims. Source or Revision metadata and
-   authored `note_text` do not supply captured source citations.
-3. Run `lwiki --json page init --file BODY.md --title 'TITLE' --source-refs REFS.json`.
-   This saves a draft and generates readable provenance links from the verified
-   references. Use its returned page path, not a path derived from a source ID.
-4. Read the saved page with `lwiki --json read --path 'RETURNED PAGE PATH'` and
-   check its prose, citations and gaps. Report where it was saved and that it is
-   a draft. Ordinary search can exclude drafts; find it with
-   `search 'TITLE' --status draft` when needed.
-
-The refs file has this shape; fill the array with actual returned objects:
-
-```json
-{"schema_version":"1","citations":[]}
-```
-
-An empty array carries no source support. The request accepts at most 16 references
-and 64 KiB. Do not invent quotes, byte ranges, hashes or source paths. The command
-checks citation bytes and builds links; assess whether those bytes actually
-support the prose yourself. It does not publish the draft or accept graph facts.
-A read must be complete before claiming to have checked the whole saved note;
-follow a returned continuation within the user's limits if it is truncated.
-
-Use `--offline` when the user requires no network access. `--dry-run` previews
-without saving or verifying citation bytes. Captured copies do not change when
-an original note is edited; refresh and reassess support before presenting old
-citations as current.
+Human context and verified reads provide exact citation JSON. JSON is useful
+when an advanced procedure needs its full structured result, but its complete
+envelope can exceed the rendered text limit. Count all returned output and
+status messages against the task's allowance, including saved-page readback.
 
 ## When the first context leaves a gap
 
@@ -131,7 +97,7 @@ If the response exceeds your allowance or is truncated, retain the gap. Continue
 only through a separately budgeted section/continuation route; do not label a
 partial body complete or widen the original scope. Empty search and missing
 support do not prove global absence. If all conditions are supported, proceed to
-[answering](#answer-then-save-only-when-authorized).
+[answering](#save-after-resolving-support-gaps).
 
 ## Let native discovery prepare complete originals
 
@@ -292,33 +258,16 @@ within the predeclared limits, updating the table from returned evidence.
 Truncation or exhausted limits leave explicit gaps. This assisted route does not
 establish automatic context completeness or global source coverage.
 
-## Answer, then save only when authorized
+## Save after resolving support gaps
 
-Produce concise prose answering conditions supported by the actual context/replay
-or verified reads, with exact citations and explicit unresolved gaps. Check every
-condition and qualifier before reporting completion. If saving was not authorized,
-return this answer without creating a Page. For an authorized saved answer, label
-it as a draft derived from the observed revision snapshot, including the
-verification scope/generation. Keep the exact `kind: source` CitationRefs used for claims from returned context
-or `data.source_citation.citation` on a verified read. Save a JSON request outside
-the vault with `schema_version` equal to `"1"` and `citations` containing those
-unchanged objects. The request permits at most 16 references and 64 KiB. Authored `note_text` is not a Source citation. Do not add
-raw Source IDs to `wiki_depends_on_ids`, which names accepted assertions, or
-promote the synthesis into accepted graph evidence.
-
-Save the prose body outside the vault, then run
-`page init --file BODY.md --title TITLE --source-refs REFS.json`. The command
-uses its actual allocated Page path to generate Source, immutable Revision and
-captured-content links, plus the exact machine-readable refs. No source-path
-arithmetic is needed in the prose. Source states describe verification during
-that guarded Page write; valid links do not certify prose support, completeness
-or continuing freshness. Inspect the successful result and saved provenance.
-
-This creates a draft envelope. Obtain its allocated ID/path from the actual result;
-read that Page and retain `data.path`, `data.record`, `data.body` and `data.hash`.
-Search the title with lexical `--status draft` (and `--verify-selected` on normalized
-vaults), then read the returned Page ID/path. Ordinary default search can exclude
-drafts, so its absence alone is not a publication failure.
+Follow the cited-save steps in [../SKILL.md](../SKILL.md), using only the support
+actually returned by the advanced reads. Keep the observed revision snapshot
+and its verification scope distinct from current global coverage. Authored
+`note_text` is not a captured source citation. Do not add raw Source IDs to
+`wiki_depends_on_ids`, which names accepted assertions, or promote a synthesis
+into accepted graph evidence. Read the whole saved draft and generated references
+before claiming that check is complete. Ordinary search can exclude drafts;
+use `search 'TITLE' --status draft` when needed.
 
 ## Guard and reconcile an edit
 

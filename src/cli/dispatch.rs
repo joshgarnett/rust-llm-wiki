@@ -957,11 +957,17 @@ fn execute_selected(
             }
         }
         Command::Source {
-            command: SourceCommand::Capture { paths, files_from },
+            command:
+                SourceCommand::Capture {
+                    paths,
+                    files_from,
+                    markdown_only,
+                },
         } => {
             let outcome = app.capture_sources(crate::app::SourceCaptureRequest {
                 paths: paths.clone(),
                 files_from: files_from.clone(),
+                markdown_only: *markdown_only,
             })?;
             let owners = outcome.changed_owners.clone();
             envelope.meta.partial = outcome.partial;
@@ -973,6 +979,7 @@ fn execute_selected(
                 )));
             }
             envelope.data = value(outcome)?;
+            envelope.data["markdown_only"] = (*markdown_only).into();
             if !args.dry_run && !owners.is_empty() {
                 let automatic = super::automatic_embeddings::prepare(
                     &app,
@@ -3539,6 +3546,13 @@ fn present_inner(
         }
         OutputFormat::Human if envelope.ok && envelope.command == "source read" => {
             super::source_capture::present_read(envelope, output)
+        }
+        OutputFormat::Human
+            if envelope.ok
+                && envelope.command == "page init"
+                && envelope.data["plan"]["operations"].is_array() =>
+        {
+            super::page_init::present(envelope, output, &command_prefix, verbose)
         }
         OutputFormat::Human if !envelope.ok => {
             if let Some(error) = &envelope.error {

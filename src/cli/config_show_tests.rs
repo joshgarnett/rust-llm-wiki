@@ -272,7 +272,7 @@ fn explicit_config_still_applies_with_disabled_ambient_discovery_and_does_not_sh
 }
 
 #[test]
-fn missing_ambient_provider_file_is_actionable_without_hiding_local_settings() {
+fn absent_optional_provider_keeps_local_workflow_available() {
     let (_temp, base) = fixture();
     let document = config::LocalConfigDocument::default();
     let config = loaded(&base, &document);
@@ -292,7 +292,8 @@ fn missing_ambient_provider_file_is_actionable_without_hiding_local_settings() {
     let mut output = Vec::new();
     present(&envelope, &mut output).unwrap();
     let text = String::from_utf8(output).unwrap();
-    assert!(text.contains("Provider settings file is missing. Run lwiki setup to add a model."));
+    assert!(text.contains("No API model configured. Capture and word search work without one."));
+    assert!(!text.contains("file is missing"));
     assert!(text.contains("Maximum bytes per input: 12000 (built-in default)"));
     assert!(text.contains("Maximum request attempts: 60 (built-in default)"));
 }
@@ -474,4 +475,29 @@ fn inspection_uses_scoped_file_for_selected_wiki_and_global_without_selection() 
         result.data["provider_configuration"]["origin"],
         "user_config"
     );
+}
+
+#[test]
+fn missing_explicit_provider_selection_remains_diagnostic() {
+    for saved_path in [false, true] {
+        let (_temp, base) = fixture();
+        let provider_path = base.join("missing-providers.toml");
+        let document = config::LocalConfigDocument {
+            providers_config: saved_path.then(|| provider_path.clone()),
+            ..Default::default()
+        };
+        let config = loaded(&base, &document);
+        let args = arguments(if saved_path {
+            &[]
+        } else {
+            &["--profile", "notes"]
+        });
+        let envelope = inspect_loaded(&args, &config, &base, || Ok(provider_path.clone())).unwrap();
+        assert_eq!(envelope.data["provider_configuration"]["present"], false);
+        let mut output = Vec::new();
+        present(&envelope, &mut output).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("Provider settings file is missing."));
+        assert!(!text.contains("No API model configured."));
+    }
 }

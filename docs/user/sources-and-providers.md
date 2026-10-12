@@ -19,6 +19,17 @@ failed files. Repeat the command to add new files and refresh changed ones. It k
 earlier copies and leaves your originals unchanged. Use `--offline` when you
 want no provider requests.
 
+To capture only Markdown notes and leave plain-text attachments out:
+
+```sh
+lwiki source capture "/absolute/path/to/Notes/project" --markdown-only
+```
+
+This includes `.md` and `.markdown`, including uppercase suffixes. Repeat the
+same command to update only those notes. The summary shows a few saved files
+and every reported issue; ask `lwiki context "your question"` to read matching
+text and its citations.
+
 For notes in several places, pass several paths or make a UTF-8 text file with
 one path per line:
 

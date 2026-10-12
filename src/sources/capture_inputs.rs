@@ -70,6 +70,13 @@ fn text_default(path: &Path) -> bool {
         .and_then(|s| s.to_str())
         .is_some_and(|s| matches!(s.to_ascii_lowercase().as_str(), "md" | "markdown" | "txt"))
 }
+pub(crate) fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
+        })
+}
 fn hidden(path: &Path) -> bool {
     path.file_name()
         .and_then(|s| s.to_str())
@@ -151,6 +158,7 @@ impl ObservedCaptureInput {
 
 struct Selection<'a> {
     wiki: &'a Path,
+    markdown_only: bool,
     limits: CaptureInputLimits,
     selected: BTreeMap<PathBuf, PathBuf>,
     issues: Vec<CaptureInputIssue>,
@@ -160,6 +168,13 @@ struct Selection<'a> {
     output_bytes: usize,
 }
 impl Selection<'_> {
+    fn accepts_file_type(&self, path: &Path, explicit: bool) -> bool {
+        if self.markdown_only {
+            is_markdown_path(path)
+        } else {
+            explicit || text_default(path)
+        }
+    }
     fn tick(&mut self, display: &Path) -> Result<()> {
         self.entries += 1;
         self.output_bytes = self
@@ -281,7 +296,7 @@ impl Selection<'_> {
             }
         } else if !meta.is_file() {
             self.issue(display, true, "not_regular", None);
-        } else if !explicit && !text_default(&path) {
+        } else if !self.accepts_file_type(&path, explicit) {
             self.issue(display, true, "file_type", None);
         } else {
             if self.selected.len() >= self.limits.max_files {
@@ -297,6 +312,7 @@ pub(crate) fn observe_inputs(
     paths: &[PathBuf],
     files_from: Option<&Path>,
     wiki: &Path,
+    markdown_only: bool,
     limits: CaptureInputLimits,
 ) -> Result<CaptureInputs> {
     let mut inputs = paths.to_vec();
@@ -328,6 +344,7 @@ pub(crate) fn observe_inputs(
     }
     let mut selection = Selection {
         wiki,
+        markdown_only,
         limits,
         selected: BTreeMap::new(),
         issues: vec![],
@@ -337,7 +354,7 @@ pub(crate) fn observe_inputs(
         output_bytes: 0,
     };
     // Explicit members precede directory traversal, so a selected non-default
-    // format is retained even when an overlapping folder would exclude it.
+    // format is retained by default even when an overlapping folder excludes it.
     inputs.sort_by_key(|path| std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir()));
     for display in inputs {
         match normalized_path(&display) {
