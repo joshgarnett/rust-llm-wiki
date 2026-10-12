@@ -5,7 +5,7 @@ It is a conservative superset, including development and platform dependencies.
 License texts come from checksum-verified crates or pinned upstream files.
 Supplemental upstream file URLs and hashes are recorded below.
 This list does not replace independent legal review.
-Cargo.lock SHA256: 34f68e82ed446ae0698596698976b052b9886d1ab866672c21f13d1b0618177f
+Cargo.lock SHA256: 02f82224348ebaa6c9352116bf05c1309fb329393bdb532a330264604baa36b5
 
 ========================================================================
 ahash-0.8.12
