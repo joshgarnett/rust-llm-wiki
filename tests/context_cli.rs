@@ -1012,7 +1012,16 @@ fn context_cli_dry_run_is_pure_and_bad_requests_never_claim_verification() {
         assert_eq!(exit, 2, "{args:?}: {e}");
         assert!(e["meta"]["freshness"].is_null());
     }
-    let (exit, e) = invoke(f.path(), &["context", "uses", "--no-sync"]);
+    // The omitted mode now chooses local saved-index context for --no-sync.
+    // Explicit current scope still refuses rather than claiming freshness.
+    let saved = ok(f.path(), &["context", "uses", "--no-sync"]);
+    // This fixture also passes --offline, which takes precedence in the reason.
+    assert_eq!(saved["data"]["automatic_embeddings"]["reason"], "offline");
+    assert_eq!(saved["meta"]["network_used"], false);
+    let (exit, e) = invoke(
+        f.path(),
+        &["context", "uses", "--no-sync", "--scope", "current"],
+    );
     assert_eq!(exit, 4);
     assert_eq!(e["error"]["code"], "FRESHNESS_CONFLICT");
     let (exit, e) = invoke(

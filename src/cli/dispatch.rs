@@ -2529,6 +2529,9 @@ fn finish_read_health(
     current_read_health: Option<Value>,
 ) -> Result<()> {
     if let Some(health) = current_read_health {
+        // Result metadata may have copied the transient SQL generation after
+        // the reader's health was captured. It is never a published generation.
+        envelope.meta.index_generation = None;
         // The private generation zero binds SQL/cursors, never publication.
         if envelope.data.get("snapshot").is_some() {
             envelope.data["snapshot"]["generation"] = Value::Null;
