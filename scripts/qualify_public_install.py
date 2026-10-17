@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import time
+from urllib.parse import quote
 
 import verify_release
 
@@ -77,6 +78,37 @@ def inventory(root):
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_captured_passage(passage, captured, read, body):
+    """Authenticate a public logical locator through an ordinary public read."""
+    source, revision = (captured["allocated_ids"][key] for key in ("source", "revision"))
+    path = "sources/" + source + "/revisions/" + revision + "/content.md"
+    operation = next(op for op in captured["plan"]["operations"] if op["path"] == path)
+    expected_hash = operation["after"]["hash"]
+    span = {"start": 0, "end": len(body)}
+    citation = {"kind": "source", "reference": {
+        "source_id": source, "source_revision": revision, "span": span,
+        "quote_hash": expected_hash}}
+    assert operation["after"]["state"] == "hash" and operation["byte_len"] == len(body)
+    assert passage["locator"]["path"] == read["path"] == path
+    assert passage["locator"]["observed_hash"] == read["hash"] == expected_hash
+    assert passage["locator"]["record"]["record_id"] == revision
+    assert passage["locator"]["record"]["expected_kind"] == "revision"
+    assert passage["span"] == read["range"] == span
+    assert passage["text"].encode() == read["body"].encode() == body
+    assert read["truncated"] is False and read["continuation"] is None
+    assert passage["eligibility"] == "current"
+    assert citation in passage["citations"]
+    assert read["source_citation"] == {"citation": citation, "eligibility": "current"}
+
+
+def verify_restored_rendering(context, restored_context, wiki, restored):
+    # Only a Markdown link's absolute wiki root changes after a folder restore.
+    old_root = "<" + quote(str(wiki), safe="/") + "/"
+    new_root = "<" + quote(str(restored), safe="/") + "/"
+    assert old_root in context["text"], "original context omitted its saved-note link"
+    assert restored_context["text"] == context["text"].replace(old_root, new_root)
 
 
 def main():
@@ -210,24 +242,16 @@ def main():
         assert any("PUBLIC-INSTALL-482" in h.get("excerpt", {}).get("text", "") for h in hits["hits"])
         context = cli("context", ["context", "PUBLIC-INSTALL-482", "--max-bytes", "6000", "--max-tokens", "1500"])
         assert "14:35 UTC" in context["text"]
-        valid = False
+        facts = []
         for passage in context["passages"]:
             if "PUBLIC-INSTALL-482" not in passage["text"]:
                 continue
-            path = (wiki / passage["locator"]["path"]).resolve(strict=True)
-            assert wiki.resolve() in path.parents
-            payload = path.read_bytes()
-            span = passage["span"]
-            assert payload == body
-            assert payload[span["start"]:span["end"]].decode() == passage["text"]
-            valid |= any(c.get("kind") == "source" and
-                         c.get("reference", {}).get("source_id") == captured["allocated_ids"]["source"] and
-                         c["reference"].get("source_revision") == captured["allocated_ids"]["revision"] and
-                         c["reference"].get("span") == span for c in passage["citations"])
-        assert valid and note.read_bytes() == body
-        fact = next(p for p in context["passages"] if "PUBLIC-INSTALL-482" in p["text"])
-        original_read = cli("original-read", ["read", "--path", fact["locator"]["path"], "--max-bytes", "6000"])
-        assert original_read["body"].encode() == body
+            label = "original-read" if not facts else "original-read-" + str(len(facts))
+            read = cli(label, ["read", "--path", passage["locator"]["path"], "--max-bytes", "6000"])
+            verify_captured_passage(passage, captured, read, body)
+            facts.append((passage, read))
+        assert facts and note.read_bytes() == body
+        fact, original_read = facts[0]
         # All commands have exited; copy the complete folder exactly as documented.
         original_inventory = inventory(wiki)
         assert any(p.startswith(".wiki/") for p in original_inventory)
@@ -243,11 +267,11 @@ def main():
         restored_read = cli("restored-read", restored_prefix + ["read", "--path", fact["locator"]["path"], "--max-bytes", "6000"])
         assert restored_read["body"] == original_read["body"]
         restored_context = cli("restored-context", restored_prefix + ["context", "PUBLIC-INSTALL-482", "--max-bytes", "6000", "--max-tokens", "1500"])
-        assert restored_context["text"] == context["text"]
+        verify_restored_rendering(context, restored_context, wiki, restored)
         restored_fact = next(p for p in restored_context["passages"] if "PUBLIC-INSTALL-482" in p["text"])
         for key in ("text", "span", "locator", "citations"):
             assert restored_fact[key] == fact[key], "restored evidence changed: " + key
-        assert (restored / fact["locator"]["path"]).read_bytes() == body
+        verify_captured_passage(restored_fact, captured, restored_read, body)
         assert inventory(wiki) == original_inventory == inventory(backup)
         assert note.read_bytes() == body
         result["backup_restore"] = {"status": "passed", "inventory_entries": len(original_inventory),
