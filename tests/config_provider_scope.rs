@@ -121,6 +121,9 @@ fn serve(listener: std::net::TcpListener) -> Vec<Value> {
                 Err(error) => panic!("mock accept: {error}"),
             }
         };
+        // Accepted sockets may inherit the listener's nonblocking mode.
+        // Request reads use the timeout below on every platform.
+        socket.set_nonblocking(false).unwrap();
         socket
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();

@@ -338,6 +338,9 @@ impl GenerationMock {
                     }
                     Err(error) => panic!("mock accept: {error}"),
                 };
+                // Accepted sockets may inherit the listener's nonblocking mode.
+                // Request reads use the timeout below on every platform.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
