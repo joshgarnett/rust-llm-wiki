@@ -215,20 +215,26 @@ fn normalize_provenance(
     for (i, source) in sources.iter().enumerate() {
         let label = format!("SOURCE_{i}");
         // Exact authenticated role fields and canonical path components only.
-        block = block.replace(
-            &format!("\"source_id\": \"{source}\""),
-            &format!("\"source_id\": \"{label}\""),
-        );
+        for encoded in [source.to_owned(), source.replace('-', "\\u002d")] {
+            block = block.replace(
+                &format!("\"source_id\": \"{encoded}\""),
+                &format!("\"source_id\": \"{label}\""),
+            );
+        }
         block = block.replace(&format!("sources/{source}/"), &format!("sources/{label}/"));
     }
     for (label, hit) in [("OLD_REVISION", old_hit), ("NEW_REVISION", new_hit)] {
         let revision = hit["excerpt"]["citation"]["reference"]["source_revision"]
             .as_str()
             .unwrap();
-        block = block.replace(
-            &format!("\"source_revision\": \"{revision}\""),
-            &format!("\"source_revision\": \"{label}\""),
-        );
+        // Comment-safe JSON encodes hyphens losslessly; normalize the same
+        // exact authenticated role field in either representation.
+        for encoded in [revision.to_owned(), revision.replace('-', "\\u002d")] {
+            block = block.replace(
+                &format!("\"source_revision\": \"{encoded}\""),
+                &format!("\"source_revision\": \"{label}\""),
+            );
+        }
         block = block.replace(
             &format!("/revisions/{revision}/"),
             &format!("/revisions/{label}/"),

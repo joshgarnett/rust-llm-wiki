@@ -281,8 +281,11 @@ fn local_config_precedence_and_portable_trust_boundaries() {
     assert!(p.profile_permitted);
     let p = local::resolve(&f, &id("Vault.Case"), &Default::default(), None).unwrap();
     assert_eq!(p.read_max_bytes, 10);
+    assert_eq!(p.profile.as_deref(), Some("portable"));
+    assert_eq!(p.origins["profile"], "portable_wiki");
     assert!(!p.profile_permitted);
-    assert!(!p.warnings.is_empty());
+    // An unpermitted profile grants no authority and does not warn on local work.
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
     let marker = fs::read_to_string(t.path().join("WIKI.md"))
         .unwrap()
         .replace(

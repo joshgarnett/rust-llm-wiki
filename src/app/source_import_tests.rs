@@ -22,7 +22,7 @@ use crate::{
         verification,
     },
     sources::{CaptureRequest, ExtractionInput, SourceOrigin},
-    storage::{self, StorageOptions},
+    storage::{self, StorageOptions, layout::LayoutKind},
     vault::{DirectorySync, DurableIo, NativeIo, VaultFs, VaultRoot, WriterPermit},
 };
 use serde_json::{Value, json};
@@ -59,6 +59,16 @@ struct Fixture {
 }
 impl Fixture {
     fn new(migrated: bool, count: usize) -> Self {
+        Self::with_layout_count(
+            if migrated {
+                LayoutKind::Retained
+            } else {
+                LayoutKind::Legacy
+            },
+            count,
+        )
+    }
+    fn with_layout_count(layout: LayoutKind, count: usize) -> Self {
         let inputs: Vec<_> = (0..count)
             .map(|n| {
                 (
@@ -71,20 +81,47 @@ impl Fixture {
                 )
             })
             .collect();
-        Self::with_inputs(migrated, inputs)
+        Self::with_layout_inputs(layout, inputs)
     }
     fn with_inputs(migrated: bool, inputs: Vec<(String, Vec<u8>)>) -> Self {
+        Self::with_layout_inputs(
+            if migrated {
+                LayoutKind::Retained
+            } else {
+                LayoutKind::Legacy
+            },
+            inputs,
+        )
+    }
+    fn with_layout_inputs(layout: LayoutKind, inputs: Vec<(String, Vec<u8>)>) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("import vault with spaces");
-        init(&root, "Public import fixture", options()).unwrap();
+        if layout == LayoutKind::ReadableSources {
+            init(&root, "Public import fixture", options()).unwrap();
+        } else {
+            // Old storage workflows start from actual schema 1 authority;
+            // current init intentionally creates schema 3 instead.
+            fs::create_dir(&root).unwrap();
+            fs::write(
+                root.join("WIKI.md"),
+                include_bytes!("../../tests/fixtures/bootstrap/vault/WIKI.md"),
+            )
+            .unwrap();
+            for directory in ["pages", "sources", "changes"] {
+                fs::create_dir(root.join(directory)).unwrap();
+            }
+        }
         let vault = VaultFs::new(VaultRoot::explicit(&root).unwrap());
-        if migrated {
+        if layout == LayoutKind::Retained {
             let writer = WriterPermit::acquire(vault.root(), Duration::ZERO).unwrap();
             storage::cleanup(&vault, &writer, &StorageOptions::default()).unwrap();
         }
         let app = OfflineApp::new(vault, options()).unwrap();
         app.index_rebuild_normalized().unwrap();
-        assert_eq!(storage::layout::active(app.fs().root()).unwrap(), migrated);
+        assert_eq!(
+            storage::layout::layout_kind(app.fs().root()).unwrap(),
+            layout
+        );
         let input_root = temp.path().join("outside inputs with spaces");
         fs::create_dir(&input_root).unwrap();
         let list = input_root.join("inputs.jsonl");
@@ -292,9 +329,13 @@ fn mapping(group: &super::SourceImportGroup) -> Vec<(u64, RecordId, RecordId)> {
 
 #[test]
 fn public_import_one_four_and_eight_share_exactly_one_change_per_group() {
-    for migrated in [false, true] {
+    for layout in [
+        LayoutKind::Legacy,
+        LayoutKind::Retained,
+        LayoutKind::ReadableSources,
+    ] {
         for group_size in [1, 4, 8] {
-            let fixture = Fixture::new(migrated, 8);
+            let fixture = Fixture::with_layout_count(layout, 8);
             let hash = fixture.prepare();
             let mut result = fixture
                 .app()
@@ -316,7 +357,24 @@ fn public_import_one_four_and_eight_share_exactly_one_change_per_group() {
                     .unwrap();
                 assert_eq!(change.prepared, group.change);
                 assert_eq!(change.status, ChangeStatus::Committed);
-                assert_eq!(change.manifest.operations.len(), group_size * 4);
+                let display_count = change
+                    .manifest
+                    .operations
+                    .iter()
+                    .filter(|operation| operation.target.as_str().starts_with("sources/views/"))
+                    .count();
+                assert_eq!(
+                    display_count,
+                    if layout == LayoutKind::ReadableSources {
+                        group_size
+                    } else {
+                        0
+                    }
+                );
+                assert_eq!(
+                    change.manifest.operations.len(),
+                    group_size * 4 + display_count
+                );
                 all.extend(mapping(group));
                 assert_eq!(result.imported_items as usize, all.len());
                 if result.completed {
@@ -346,6 +404,10 @@ fn public_import_one_four_and_eight_share_exactly_one_change_per_group() {
             assert!(status.completed);
             assert_eq!(status.groups_committed, 8 / group_size as u64);
             assert_eq!(status.pending_change, None);
+            let checked = fixture.app().check().unwrap();
+            assert!(checked.complete);
+            assert_eq!(checked.error_count, 0, "{:?}", checked.diagnostics);
+            assert_eq!(checked.cache_matches_canonical, Some(true));
         }
     }
 }
@@ -1636,7 +1698,12 @@ fn wal_read(
     .unwrap();
     let (envelope, exit) = crate::cli::execute(&args);
     assert_eq!(exit, 0, "{}", serde_json::to_string(&envelope).unwrap());
-    assert_eq!(envelope.meta.freshness.as_deref(), Some("indexed_evidence"));
+    assert_eq!(
+        envelope.meta.freshness.as_deref(),
+        Some("verified_snapshot")
+    );
+    assert!(envelope.meta.verified_at.is_some());
+    assert!(!envelope.meta.network_used);
     let read = envelope.data;
     assert_eq!(read["path"], path.as_str());
     assert_eq!(read["body"].as_str().unwrap().as_bytes(), body);

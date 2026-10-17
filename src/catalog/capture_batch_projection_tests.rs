@@ -910,6 +910,7 @@ fn capture_batch_tampered_descriptor_and_retained_payload_are_not_replay_authori
                 .unwrap();
         let mut proof = session.proof().clone();
         drop(session);
+        let before = proof.base.clone();
         if corrupt_payload {
             let engine = ChangeEngine::new(fixture.fs.clone()).unwrap();
             let manifest = engine
@@ -938,16 +939,19 @@ fn capture_batch_tampered_descriptor_and_retained_payload_are_not_replay_authori
         }
         let resumed = IndexedRefreshSession::resume(&fixture.catalog, &fixture.writer, proof);
         if corrupt_payload {
-            let mut resumed = resumed.unwrap();
-            assert!(
-                ChangeEngine::new(fixture.fs.clone())
-                    .unwrap()
-                    .apply_indexed_refresh(&fixture.writer, &mut resumed)
-                    .is_err()
-            );
+            let error = resumed
+                .err()
+                .expect("corrupt retained bytes must refuse resume");
+            assert_eq!(error.code, ErrorCode::RecordInvalid);
+            assert_eq!(error.message, "retained payload integrity failure");
         } else {
             assert!(resumed.is_err());
         }
+        let after = fixture
+            .catalog
+            .query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        assert_eq!(QueryCatalog::snapshot(&after), &before);
         assert!(!fixture.fs.root().path().join("sources").exists());
     }
 }

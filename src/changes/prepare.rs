@@ -308,10 +308,16 @@ impl ChangeEngine {
         draft: ChangeDraft,
     ) -> Result<NamedPreparation> {
         permit.require_root(self.fs.root())?;
+        let allocations = draft.allocated_ids.len();
+        let captures = allocations / 2;
+        // Each capture owns a source, revision and original, plus optional
+        // extracted content and a readable source copy. Keep the eight-member
+        // bound while admitting all five writes in the current layout.
         if draft.origin.is_some()
             || draft.inverse_of.is_some()
-            || !(3..=32).contains(&draft.operations.len())
-            || !(2..=16).contains(&draft.allocated_ids.len())
+            || !(2..=16).contains(&allocations)
+            || !allocations.is_multiple_of(2)
+            || !(captures * 3..=captures * 5).contains(&draft.operations.len())
             || draft
                 .operations
                 .iter()

@@ -34,11 +34,20 @@ pub(crate) fn input_layout_kind(input: &crate::changes::ValidationInput) -> Opti
         .iter()
         .filter(|document| document.path.as_str() == "WIKI.md");
     let marker = markers.next()?;
-    if markers.next().is_some() || Blake3Hash::digest(&marker.bytes) != marker.hash {
+    if markers.next().is_some() {
+        return None;
+    }
+    marker_layout_kind(&input.vault_id, marker)
+}
+pub(crate) fn marker_layout_kind(
+    vault_id: &RecordId,
+    marker: &crate::changes::ScanDocument,
+) -> Option<LayoutKind> {
+    if marker.path.as_str() != "WIKI.md" || Blake3Hash::digest(&marker.bytes) != marker.hash {
         return None;
     }
     let record = parse_note(&marker.bytes).canonical?;
-    if record.kind() != RecordKind::Vault || record.id() != &input.vault_id {
+    if record.kind() != RecordKind::Vault || record.id() != vault_id {
         return None;
     }
     match record.string("wiki_schema") {

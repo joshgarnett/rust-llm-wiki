@@ -51,7 +51,10 @@ fn captured_scope_body_fixture(count: usize, body: &str) -> Fixture {
             .plan_capture(capture(TITLE, &format!("scope-{index}.txt"), body))
             .unwrap();
         for operation in plan.draft.unwrap().operations {
-            let target = fixture.fs.root().path().join(operation.target.as_str());
+            let physical =
+                crate::storage::layout::physical_relative(fixture.fs.root(), &operation.target)
+                    .unwrap();
+            let target = fixture.fs.root().path().join(physical.as_str());
             std::fs::create_dir_all(target.parent().unwrap()).unwrap();
             std::fs::write(target, operation.proposed.unwrap()).unwrap();
         }
@@ -293,11 +296,7 @@ fn normalized_evidence_set_final_proof_rejects_changed_selected_source() {
         let store = VectorStore::open(&fixture.fs, None).unwrap();
         let state = store.active().unwrap().unwrap();
         let fault = Arc::new(ChangeBeforeEmission {
-            path: fixture
-                .fs
-                .root()
-                .path()
-                .join(content_path(&source, &revision).as_str()),
+            path: physical_content_path(&fixture, &source, &revision),
             reached: AtomicBool::new(false),
         });
         let options = ContextOptions {
@@ -370,6 +369,19 @@ fn add(fixture: &Fixture, title: &str, origin: &str, body: &str) -> (RecordId, R
 
 fn content_path(source: &RecordId, revision: &RecordId) -> VaultRelativePath {
     VaultRelativePath::new(format!("sources/{source}/revisions/{revision}/content.md")).unwrap()
+}
+
+fn physical_content_path(
+    fixture: &Fixture,
+    source: &RecordId,
+    revision: &RecordId,
+) -> std::path::PathBuf {
+    let physical = crate::storage::layout::physical_relative(
+        fixture.fs.root(),
+        &content_path(source, revision),
+    )
+    .unwrap();
+    fixture.fs.root().path().join(physical.as_str())
 }
 
 fn ledger(fixture: &Fixture, report: &EmbeddingReport) -> JobLedger {
@@ -738,6 +750,10 @@ fn normalized_refresh_new_owner_and_withdrawal_use_only_current_vector_membershi
     let (changing, old_revision) = add(&fixture, TITLE, "changing.txt", FIRST);
     let stable_body = "Signalneedle stable owner retains 41 green tokens.\n";
     let (stable, _) = add(&fixture, "Stable title", "stable.txt", stable_body);
+    let captured_check = fixture.app.check().unwrap();
+    assert!(captured_check.complete);
+    assert_eq!(captured_check.error_count, 0);
+    assert_eq!(captured_check.cache_matches_canonical, Some(true));
     let responses = Arc::new(Responses::new());
     let dispatch = dispatcher(&fixture.fs, responses.clone());
     let runtime = runtime(&fixture.service, &dispatch);
@@ -759,6 +775,10 @@ fn normalized_refresh_new_owner_and_withdrawal_use_only_current_vector_membershi
         .unwrap();
     let new_revision = refreshed.allocated_ids["revision"].clone();
     assert_ne!(new_revision, old_revision);
+    let refreshed_check = fixture.app.check().unwrap();
+    assert!(refreshed_check.complete);
+    assert_eq!(refreshed_check.error_count, 0);
+    assert_eq!(refreshed_check.cache_matches_canonical, Some(true));
     let missing = fixture
         .app
         .embeddings_check(&settings, None, false)
@@ -859,14 +879,8 @@ fn normalized_refresh_new_owner_and_withdrawal_use_only_current_vector_membershi
             .unwrap()
             .is_some()
     );
-    let old_bytes = std::fs::read(
-        fixture
-            .fs
-            .root()
-            .path()
-            .join(content_path(&changing, &old_revision).as_str()),
-    )
-    .unwrap();
+    let old_bytes =
+        std::fs::read(physical_content_path(&fixture, &changing, &old_revision)).unwrap();
     assert_eq!(old_bytes, FIRST.as_bytes());
 }
 
@@ -1025,14 +1039,7 @@ fn normalized_received_source_change_rejects_paid_output_without_resend_or_hold_
         Some(&changed.allocated_ids["revision"])
     );
     assert_eq!(
-        std::fs::read(
-            fixture
-                .fs
-                .root()
-                .path()
-                .join(content_path(&source, &old_revision).as_str())
-        )
-        .unwrap(),
+        std::fs::read(physical_content_path(&fixture, &source, &old_revision)).unwrap(),
         FIRST.as_bytes()
     );
 
@@ -1147,11 +1154,7 @@ fn normalized_membership_final_source_recheck_rolls_back_active_publication() {
         .unwrap();
     let changed = FIRST.replace("17", "99");
     assert_eq!(changed.len(), FIRST.len());
-    let raw_path = fixture
-        .fs
-        .root()
-        .path()
-        .join(content_path(&source, &revision).as_str());
+    let raw_path = physical_content_path(&fixture, &source, &revision);
     let mut reached = false;
     let result = store.memberships_with_spec_checked(
         &candidate,
@@ -2877,8 +2880,12 @@ fn normalized_multi_unit_owner_reuse_completes_unchanged_semantic_row_budget() {
                 // Identical passages may merge exact citations from distinct
                 // owners. Authenticate each against its own canonical revision.
                 let cited_path = content_path(&reference.source_id, &reference.source_revision);
-                let canonical =
-                    std::fs::read(fixture.fs.root().path().join(cited_path.as_str())).unwrap();
+                let canonical = std::fs::read(physical_content_path(
+                    &fixture,
+                    &reference.source_id,
+                    &reference.source_revision,
+                ))
+                .unwrap();
                 let cited_bytes = canonical
                     .get(reference.span.start() as usize..reference.span.end() as usize)
                     .expect("citation span must be within its exact Source revision");

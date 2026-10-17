@@ -793,7 +793,7 @@ fn finish_selected(
         after.insert(path.clone(), ExpectedState::Absent);
     }
     draft.read_preconditions = deps(work.before.clone());
-    delta.dependencies = deps(after.clone());
+    delta.dependencies = work.catalog_dependencies(after.clone())?;
     delta.validate()?;
     work.tick()?;
     if !external {
@@ -856,6 +856,7 @@ pub(super) fn project_external_pages(
     limits: &RefreshProjectionLimits,
 ) -> Result<CatalogDelta> {
     let mut work = Work::new(fs, reader, limits)?;
+    work.capture_path(&VaultRelativePath::new("WIKI.md")?)?;
     let mut pages = Vec::new();
     for (path, old, new) in changes {
         let record = new.as_ref().and_then(|n| n.canonical.as_ref());

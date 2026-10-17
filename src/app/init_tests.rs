@@ -411,7 +411,7 @@ fn marker_publication_cuts_leave_existing_author_folder_usable_with_exact_citati
 }
 
 #[test]
-fn existing_folder_before_marker_cut_retries_without_adopting_staging() {
+fn existing_folder_before_marker_cut_resumes_owned_bootstrap_and_preserves_staging() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("Author wiki");
     author_folder(&root);
@@ -421,16 +421,32 @@ fn existing_folder_before_marker_cut_retries_without_adopting_staging() {
     .unwrap_err();
     assert_eq!(error.details["initialization"]["applied"], true);
     assert_eq!(error.details["initialization"]["published"], false);
-    let stage = PathBuf::from(
-        error.details["initialization"]["retained_paths"][0]
-            .as_str()
-            .unwrap(),
-    );
+    let stage = error.details["initialization"]["retained_paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| PathBuf::from(value.as_str().unwrap()))
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".lwiki-marker-")
+        })
+        .unwrap();
     let bytes = fs::read(&stage).unwrap();
+    let authority = tree(&root.join(".wiki"));
     assert!(!root.join("WIKI.md").exists());
-    assert!(!root.join(".wiki").exists());
+    assert!(root.join(".wiki/state/storage/layout.json").is_file());
+    assert!(!root.join(".wiki/state/writer.lock").exists());
     init_with_existing(&root, "Author wiki", true, options(false)).unwrap();
     assert_eq!(bytes, fs::read(stage).unwrap());
+    assert_eq!(bytes, fs::read(root.join("WIKI.md")).unwrap());
+    let current = tree(&root.join(".wiki"));
+    for (path, (kind, bytes, modified)) in authority {
+        if kind == "file" {
+            assert_eq!(current.get(&path), Some(&(kind, bytes, modified)));
+        }
+    }
 }
 
 #[test]
@@ -454,9 +470,12 @@ fn destination_and_marker_publication_never_replace_concurrent_author_paths() {
     let author = temp.path().join("Author wiki");
     author_folder(&author);
     let raced = author.clone();
+    let authority = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let observed_authority = authority.clone();
     let error = super::init_recovery::with_checkpoint(
         Box::new(move |point, _| {
             if point == "marker_staged" {
+                *observed_authority.borrow_mut() = Some(tree(&raced.join(".wiki")));
                 fs::write(raced.join("WIKI.md"), b"author-owned marker").unwrap();
             }
             Ok(())
@@ -469,7 +488,11 @@ fn destination_and_marker_publication_never_replace_concurrent_author_paths() {
         fs::read(author.join("WIKI.md")).unwrap(),
         b"author-owned marker"
     );
-    assert!(!author.join(".wiki").exists());
+    assert_eq!(
+        authority.borrow().as_ref().unwrap(),
+        &tree(&author.join(".wiki"))
+    );
+    assert!(!author.join(".wiki/state/writer.lock").exists());
 }
 
 #[test]
@@ -494,8 +517,8 @@ fn stage_substitution_and_managed_directory_races_preserve_unknown_bytes() {
                     fs::remove_file(&path).unwrap();
                     fs::write(path, b"unknown replacement").unwrap();
                 } else if !replace_stage && point == "marker_synced" {
-                    fs::create_dir(working.join(".wiki")).unwrap();
-                    fs::write(working.join(".wiki/author.txt"), b"unknown state").unwrap();
+                    fs::create_dir(working.join("knowledge")).unwrap();
+                    fs::write(working.join("knowledge/author.txt"), b"unknown state").unwrap();
                 }
                 Ok(())
             }),
@@ -517,10 +540,12 @@ fn stage_substitution_and_managed_directory_races_preserve_unknown_bytes() {
             assert_eq!(fs::read(stage).unwrap(), b"unknown replacement");
         } else {
             assert_eq!(
-                fs::read(root.join(".wiki/author.txt")).unwrap(),
+                fs::read(root.join("knowledge/author.txt")).unwrap(),
                 b"unknown state"
             );
-            assert!(!root.join(".wiki/state").exists());
+            assert_eq!(fs::read_dir(root.join("knowledge")).unwrap().count(), 1);
+            assert!(root.join(".wiki/state/storage/layout.json").is_file());
+            assert!(!root.join("pages").exists());
         }
     }
 }
@@ -548,7 +573,9 @@ fn real_permission_failure_after_marker_is_reported_and_capture_recovers() {
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(error.details["initialization"]["applied"], true);
     assert_eq!(error.details["initialization"]["published"], true);
-    assert!(!root.join(".wiki").exists());
+    assert!(root.join(".wiki/state/storage/layout.json").is_file());
+    assert!(!root.join(".wiki/cache").exists());
+    assert!(!root.join("pages").exists());
     assert_capture_and_context(&root);
 }
 
@@ -587,21 +614,31 @@ fn permission_refusal_before_first_write_does_not_claim_partial_initialization()
 
 #[cfg(unix)]
 #[test]
-fn initialization_durability_retry_preserves_marker_only_and_hardlinked_author_wiki() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("Author wiki");
-    author_folder(&root);
-    super::init_recovery::with_checkpoint(cut("marker_published"), || {
-        init_with_existing(&root, "Author wiki", true, options(false))
-    })
-    .unwrap_err();
-    // A legitimate hardlink does not give us grounds to reject the selected wiki.
-    fs::hard_link(root.join("WIKI.md"), temp.path().join("marker-backup.md")).unwrap();
-    let before = tree(temp.path());
-    super::init_recovery::verify_init_durability(&root).unwrap();
-    super::init_recovery::verify_init_durability(&root).unwrap();
-    assert_eq!(before, tree(temp.path()));
-    assert!(!root.join(".wiki").exists());
+fn initialization_durability_retry_preserves_legacy_and_current_hardlinked_author_wikis() {
+    for bootstrap in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Author wiki");
+        author_folder(&root);
+        if bootstrap {
+            super::init_recovery::with_checkpoint(cut("marker_published"), || {
+                init_with_existing(&root, "Author wiki", true, options(false))
+            })
+            .unwrap_err();
+        } else {
+            fs::write(
+                root.join("WIKI.md"),
+                include_bytes!("../../tests/fixtures/bootstrap/vault/WIKI.md"),
+            )
+            .unwrap();
+        }
+        // A legitimate hardlink does not give us grounds to reject the selected wiki.
+        fs::hard_link(root.join("WIKI.md"), temp.path().join("marker-backup.md")).unwrap();
+        let before = tree(temp.path());
+        super::init_recovery::verify_init_durability(&root).unwrap();
+        super::init_recovery::verify_init_durability(&root).unwrap();
+        assert_eq!(before, tree(temp.path()));
+        assert_eq!(root.join(".wiki").exists(), bootstrap);
+    }
 }
 
 #[cfg(unix)]

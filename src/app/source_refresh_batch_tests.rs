@@ -7,7 +7,7 @@ use crate::{
     changes::ChangeStatus,
     domain::{Blake3Hash, ByteSpan, CitationRef, RecordId, SourceSpanRef, VaultRelativePath},
     sources::{CaptureRequest, CitationScope, ExtractionInput, SourceOrigin, SourceView},
-    storage::{self, StorageOptions},
+    storage::{self, StorageOptions, layout::LayoutKind},
     vault::{VaultFs, VaultRoot, WriterPermit},
 };
 use serde_json::json;
@@ -46,17 +46,43 @@ struct Fixture {
 }
 impl Fixture {
     fn new(migrated: bool, count: usize) -> Self {
+        Self::with_layout(
+            if migrated {
+                LayoutKind::Retained
+            } else {
+                LayoutKind::Legacy
+            },
+            count,
+        )
+    }
+    fn with_layout(layout: LayoutKind, count: usize) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("batch vault with spaces");
-        init(&root, "Guarded batch tests", options()).unwrap();
+        if layout == LayoutKind::ReadableSources {
+            init(&root, "Guarded batch tests", options()).unwrap();
+        } else {
+            // The migration cases need a real schema 1 starting point.
+            fs::create_dir(&root).unwrap();
+            fs::write(
+                root.join("WIKI.md"),
+                include_bytes!("../../tests/fixtures/bootstrap/vault/WIKI.md"),
+            )
+            .unwrap();
+            for directory in ["pages", "sources", "changes"] {
+                fs::create_dir(root.join(directory)).unwrap();
+            }
+        }
         let vault = VaultFs::new(VaultRoot::explicit(&root).unwrap());
-        if migrated {
+        if layout == LayoutKind::Retained {
             let writer = WriterPermit::acquire(vault.root(), Duration::ZERO).unwrap();
             storage::cleanup(&vault, &writer, &StorageOptions::default()).unwrap();
         }
         let app = OfflineApp::new(vault, options()).unwrap();
         app.index_rebuild_normalized().unwrap();
-        assert_eq!(storage::layout::active(app.fs().root()).unwrap(), migrated);
+        assert_eq!(
+            storage::layout::layout_kind(app.fs().root()).unwrap(),
+            layout
+        );
         let inputs = temp.path().join("caller input files");
         fs::create_dir(&inputs).unwrap();
         let sources = (0..count)
@@ -224,11 +250,15 @@ fn whole_snapshot(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, std::time::SystemT
 }
 
 #[test]
-fn one_and_sixteen_public_file_members_preserve_identity_history_and_current_reads_in_both_layouts()
+fn one_and_sixteen_public_file_members_preserve_identity_history_and_current_reads_in_all_layouts()
 {
-    for migrated in [false, true] {
+    for layout in [
+        LayoutKind::Legacy,
+        LayoutKind::Retained,
+        LayoutKind::ReadableSources,
+    ] {
         for count in [1, 16] {
-            let f = Fixture::new(migrated, count);
+            let f = Fixture::with_layout(layout, count);
             let changed: Vec<_> = (0..count)
                 .map(|i| format!("# New fact {i}\nBlue capacity {}.\n", 31 + i).into_bytes())
                 .collect();
@@ -272,6 +302,10 @@ fn one_and_sixteen_public_file_members_preserve_identity_history_and_current_rea
                 );
             }
             assert_eq!(whole_snapshot(&f.inputs), caller_before);
+            let checked = f.app().check().unwrap();
+            assert!(checked.complete);
+            assert_eq!(checked.error_count, 0, "{:?}", checked.diagnostics);
+            assert_eq!(checked.cache_matches_canonical, Some(true));
         }
     }
 }

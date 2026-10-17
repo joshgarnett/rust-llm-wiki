@@ -260,7 +260,7 @@ pub(crate) fn project_withdraw(
         read_preconditions: deps(work.before.clone()),
         operations,
     };
-    delta.dependencies = deps(after.clone());
+    delta.dependencies = work.catalog_dependencies(after.clone())?;
     delta.validate()?;
     work.recheck()?;
     Ok(Some(ProjectedWrite::from_parts(ProjectedWriteParts {

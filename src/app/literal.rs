@@ -511,6 +511,11 @@ mod workflow_tests {
                 .unwrap();
         }
         fs::create_dir(root.join("notes")).unwrap();
+        fs::write(
+            root.join("notes/STORAGE.md"),
+            "Author-owned storage instructions.\n",
+        )
+        .unwrap();
         fs::write(root.join("notes/ordinary.md"), "\u{feff}---\r\nauthor: café # keep my comment\r\ncustom: [one, two]\r\n---\r\n# Guide\r\nCapacity is amber.\r\n\r\n```lwiki-graph-review-v1\r\nnot JSON\r\n```\r\n").unwrap();
         let app = OfflineApp::new(vault, options).unwrap();
         if normalized {
@@ -613,13 +618,9 @@ mod workflow_tests {
                 .cached_query_snapshot(Default::default())
                 .unwrap();
             let snapshot = crate::catalog::query_types::QueryCatalog::snapshot(&before).clone();
-            // Cleanup adds a visible ordinary guide only in the migrated layout.
-            // Init's landing prose remains inside canonical WIKI.md.
-            let expected_paths = if migrated {
-                vec!["STORAGE.md", "notes/ordinary.md"]
-            } else {
-                vec!["notes/ordinary.md"]
-            };
+            // The current layout excludes its owned STORAGE.md guide from
+            // canonical discovery. Init's landing prose is inside WIKI.md.
+            let expected_paths = vec!["notes/STORAGE.md", "notes/ordinary.md"];
             let inspection_paths = {
                 let sql = if normalized {
                     "SELECT path FROM documents WHERE record_id IS NULL AND source_id IS NULL AND owner_revision IS NULL AND eligibility='unsupported' ORDER BY path"
@@ -758,8 +759,11 @@ mod workflow_tests {
             let old_root = app
                 .fs
                 .root()
-                .path()
-                .join(format!("sources/{source}/revisions/{revision}"));
+                .resolve(
+                    &VaultRelativePath::new(format!("sources/{source}/revisions/{revision}"))
+                        .unwrap(),
+                )
+                .unwrap();
             let immutable = ["original.bin", "content.md", "revision.md"]
                 .map(|name| (name, fs::read(old_root.join(name)).unwrap()));
             let changed = splice_bytes(

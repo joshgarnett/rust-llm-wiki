@@ -79,6 +79,10 @@ publication. Multiple-item groups have a 4 MiB original-byte bound; size-one
 groups retain the scalar 64 MiB input ceiling. Existing file, derived-row, Work
 and delta budgets remain binding. Default grouping is four; retained groups are
 never silently split, reordered or replaced with scalar writes.
+Named preparation admits three to five writes per capture: Source metadata,
+Revision metadata, original bytes, optional extracted text and an optional
+readable source copy. Eight captures retain the sixteen-identity limit and may
+require forty writes. The projected capture group still validates every member.
 
 Bounded progress under `.wiki/state/source-imports` records the vault/key,
 immutable manifest hash, ordinal/byte cursors, one pending group with fixed
@@ -262,6 +266,11 @@ display copies are excluded from canonical discovery and embedding inputs.
 Capture, refresh, cited Page publication and withdrawal update their affected
 display files in the same guarded change. Unexpected edits to an owned display
 conflict and remain preserved.
+
+Selected writes retain display paths in their before/after proofs and write
+guards. Persisted catalog dependencies exclude those paths, matching a full
+canonical scan. This exclusion requires the authenticated schema 3 vault marker;
+an arbitrary path or display frontmatter cannot grant it.
 
 `storage migrate` explicitly moves storage 1 or 2 to this arrangement. Dry-run
 checks the plan without writes. Migration preserves all history; it does not

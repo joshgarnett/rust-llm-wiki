@@ -331,14 +331,7 @@ fn inventory_immutable_refresh_exposes_missing_new_fact_and_preserves_unrelated_
         assert!(hits.hits[0].excerpt.text.contains("29 violet tokens"));
     }
     assert_eq!(
-        fs::read(
-            fixture
-                .fs
-                .root()
-                .path()
-                .join(content_path(&changing, &old_revision).as_str())
-        )
-        .unwrap(),
+        fs::read(physical_content_path(&fixture, &changing, &old_revision)).unwrap(),
         FIRST.as_bytes()
     );
     assert!(

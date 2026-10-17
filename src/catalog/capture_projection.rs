@@ -588,7 +588,7 @@ fn project_capture_core(
         after.insert(path.clone(), ExpectedState::Hash(Blake3Hash::digest(bytes)));
     }
     draft.read_preconditions = deps(work.before.clone());
-    delta.dependencies = deps(after.clone());
+    delta.dependencies = work.catalog_dependencies(after.clone())?;
     delta.validate()?;
     work.recheck()?;
     // Directory creation is not representable by a file-hash ReadDependency.

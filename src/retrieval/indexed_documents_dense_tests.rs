@@ -622,8 +622,8 @@ fn dense_mechanics_08_external_edit_exact_agreement_and_final_proof() {
         .catalog
         .fs()
         .root()
-        .path()
-        .join(fixture.hidden_path.as_str());
+        .resolve(&fixture.hidden_path)
+        .unwrap();
     let mut stats = Diagnostics::default();
     let error = run(
         &fixture.catalog,

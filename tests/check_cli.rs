@@ -377,7 +377,10 @@ fn human_check_summarizes_selected_vault_from_unrelated_cwd_and_labels_dry_run()
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(output.stderr.is_empty());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "Provider network: not used.\n"
+        );
         assert!(!output.stdout.contains(&0x1b));
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(!text.trim_start().starts_with('{'), "{text}");

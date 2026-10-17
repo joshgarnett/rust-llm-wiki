@@ -156,6 +156,30 @@ pub(super) struct Work<'a> {
     pub(super) key_cache: BTreeMap<MatchKey, RegistryProbe>,
 }
 impl<'a> Work<'a> {
+    pub(super) fn catalog_dependencies(
+        &self,
+        map: BTreeMap<VaultRelativePath, ExpectedState>,
+    ) -> Result<Vec<ReadDependency>> {
+        let marker = self
+            .captured
+            .get(&VaultRelativePath::new("WIKI.md")?)
+            .ok_or_else(|| corrupt("selected dependency projection lacks its vault marker"))?;
+        let layout =
+            crate::storage::layout::marker_layout_kind(QueryCatalog::vault_id(self.reader), marker)
+                .ok_or_else(|| {
+                    corrupt("selected dependency projection has an invalid vault marker")
+                })?;
+        // Presentation copies remain in the selected write proof, but the
+        // rebuildable catalog tracks only canonical dependencies, just as a
+        // full scan does. Only authenticated layout 3 grants this exclusion.
+        Ok(deps(map)
+            .into_iter()
+            .filter(|dependency| {
+                !crate::storage::layout::presentation_path_excluded(Some(layout), &dependency.path)
+            })
+            .collect())
+    }
+
     pub(super) fn verify_presentation(
         &mut self,
         before: Option<&ParsedNote>,
@@ -1305,7 +1329,7 @@ pub(crate) fn project_refresh(
         after.insert(path.clone(), ExpectedState::Hash(Blake3Hash::digest(bytes)));
     }
     draft.read_preconditions = deps(work.before.clone());
-    delta.dependencies = deps(after.clone());
+    delta.dependencies = work.catalog_dependencies(after.clone())?;
     delta.validate()?;
     work.recheck()?;
     Ok(Some(ProjectedSourceRefresh {
@@ -1486,7 +1510,7 @@ pub(crate) fn project_refresh_batch(
         after.insert(path.clone(), ExpectedState::Hash(Blake3Hash::digest(bytes)));
     }
     draft.read_preconditions = deps(work.before.clone());
-    delta.dependencies = deps(after.clone());
+    delta.dependencies = work.catalog_dependencies(after.clone())?;
     delta.validate()?;
     work.recheck()?;
     Ok(Some(ProjectedWrite::from_parts(ProjectedWriteParts {

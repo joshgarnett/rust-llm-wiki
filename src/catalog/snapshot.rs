@@ -409,20 +409,20 @@ mod read_only_tests {
     #[test]
     fn read_only_scan_and_recheck_share_one_byte_allowance() {
         let (_temp, catalog) = fixture();
-        let bytes = catalog
-            .fs
-            .root()
-            .scan_markdown()
-            .unwrap()
-            .iter()
-            .map(|path| catalog.fs.read_before(path).unwrap().unwrap().bytes.len())
-            .sum::<usize>();
+        // Measure every charged observation, including marker/layout reads;
+        // the Markdown inventory alone does not describe the scan's full cost.
+        let measurement_limits = scan::ReadScanLimits::default();
+        let measurement = scan::ReadScanBudget::new(measurement_limits).unwrap();
+        scan::scan_with_budget(catalog.fs(), catalog.vault_id(), &measurement).unwrap();
+        let bytes = measurement_limits.max_bytes - measurement.remaining().0;
+        assert!(bytes > 0);
         let budget = scan::ReadScanBudget::new(scan::ReadScanLimits {
             max_bytes: bytes + 1,
             ..Default::default()
         })
         .unwrap();
         let projection = scan::scan_with_budget(catalog.fs(), catalog.vault_id(), &budget).unwrap();
+        assert_eq!(budget.remaining().0, 1);
         assert_eq!(
             scan::recheck_bounded(catalog.fs(), &projection, &budget)
                 .unwrap_err()

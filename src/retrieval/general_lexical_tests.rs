@@ -721,7 +721,10 @@ fn work(reader: &dyn QueryCatalog, query: &str, plan: &QueryPlan, leg: usize) ->
     let (keys, _) = sql.split_once("SELECT d.path,d.file_hash").unwrap();
     assert!(keys.contains("AS MATERIALIZED"));
     assert!(!keys.contains("raw_text"));
-    assert!(!keys.contains("d.body"));
+    // Ordinary Source/Revision declarations need their readability predicate
+    // before the cap. No other body read may enter candidate ranking.
+    let readable = "(coalesce(d.kind,'') NOT IN ('source','revision') OR length(trim(d.body,char(9)||char(10)||char(11)||char(12)||char(13)||' '))>0)";
+    assert!(!keys.replace(readable, "1").contains("d.body"));
     assert!(!keys.contains("d.row_json"));
     let plans = reader
         .connection()
@@ -739,6 +742,10 @@ fn work(reader: &dyn QueryCatalog, query: &str, plan: &QueryPlan, leg: usize) ->
         count += 1;
     }
     drop(rows);
+    assert!(
+        statement.get_status(StatementStatus::Sort) <= 1,
+        "candidate sorter count: {sql}"
+    );
     Work {
         vm: statement.get_status(StatementStatus::VmStep),
         scan: statement.get_status(StatementStatus::FullscanStep),
@@ -1126,6 +1133,44 @@ fn long_record_metadata_source_filter_reports_native_time_separately_from_vm() {
         0,
         "filtered RecordRow metadata is SQL/native work, not admitted payload decoding"
     );
+    // Also measure a positive source filter: the same bounded candidate and
+    // payload must survive unrelated long adopted metadata.
+    let short_plan = QueryPlan {
+        filters: SearchFilters {
+            source_ids: vec![short.source.clone()],
+            ..Default::default()
+        },
+        ..filtered.clone()
+    };
+    let long_plan = QueryPlan {
+        filters: SearchFilters {
+            source_ids: vec![long.source.clone()],
+            ..Default::default()
+        },
+        ..filtered
+    };
+    let short_source = work(&short.query(), "currentpayload", &short_plan, 3);
+    let source_reader = long.query();
+    let long_source = work(&source_reader, "currentpayload", &long_plan, 3);
+    assert_eq!(short_source.rows, 1);
+    assert_eq!(long_source.rows, 1);
+    assert!(
+        long_source.vm <= short_source.vm * 2 + 200,
+        "{short_source:?} -> {long_source:?}"
+    );
+    assert!(
+        long_source.scan <= short_source.scan + 10,
+        "{short_source:?} -> {long_source:?}"
+    );
+    let positive = search_catalog(&source_reader, "currentpayload", &long_plan).unwrap();
+    assert_eq!(positive.hits.len(), 1);
+    assert_eq!(positive.hits[0].owner_revision.as_ref(), Some(&long.head));
+    assert!(
+        source_reader.usage().rows <= 20,
+        "{:?}",
+        source_reader.usage()
+    );
+    eprintln!("general lexical positive source-filter short={short_source:?} long={long_source:?}");
 }
 #[test]
 fn paired_unicode_normalization_preserves_raw_spans_and_exact_alias_bytes() {

@@ -461,8 +461,13 @@ fn mandatory_closure_counts_citation_headers_tokens_and_four_exact_passages_with
         .as_str()
         .unwrap()
         .to_owned();
+    let physical = crate::storage::layout::physical_relative(
+        fixture.fs.root(),
+        &VaultRelativePath::new(captured_path).unwrap(),
+    )
+    .unwrap();
     let fault = Arc::new(ChangeBeforeEmission {
-        path: fixture.fs.root().path().join(captured_path),
+        path: fixture.fs.root().path().join(physical.as_str()),
         reached: AtomicBool::new(false),
     });
     let before = responses.calls.load(Ordering::SeqCst);

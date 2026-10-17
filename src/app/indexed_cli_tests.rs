@@ -1534,7 +1534,7 @@ fn indexed_cli_staged_page_refuses_an_external_edit_without_overwriting_it() {
 fn indexed_cli_general_search_preserves_authored_results_filters_and_cached_dry_run() {
     let legacy = general_fixture(false);
     let normalized = general_fixture(true);
-    for words in [
+    for mut words in [
         vec!["search", "page_general_a", "--no-sync"],
         vec!["search", "PlanningSignal Handbook", "--no-sync"],
         vec!["search", "PlanningAlias", "--no-sync"],
@@ -1559,6 +1559,7 @@ fn indexed_cli_general_search_preserves_authored_results_filters_and_cached_dry_
         ],
         vec!["search", "no_result_signal", "--no-sync"],
     ] {
+        words.extend(["--mode", "lexical"]);
         let expected = legacy.cli(&words);
         let actual = normalized.cli(&words);
         for field in [
@@ -1577,12 +1578,21 @@ fn indexed_cli_general_search_preserves_authored_results_filters_and_cached_dry_
         assert!(actual["meta"]["verified_at"].is_null());
     }
     let before = tree(&normalized.root);
-    let dry = normalized.cli(&["--dry-run", "search", "PlanningSignal", "--no-sync"]);
-    let actual = normalized.cli(&["search", "PlanningSignal", "--no-sync"]);
+    let dry = normalized.cli(&[
+        "--dry-run",
+        "search",
+        "PlanningSignal",
+        "--no-sync",
+        "--mode",
+        "lexical",
+    ]);
+    let actual = normalized.cli(&["search", "PlanningSignal", "--no-sync", "--mode", "lexical"]);
     let mut executed = actual["data"].clone();
     let health = executed.as_object_mut().unwrap().remove("health").unwrap();
-    assert_eq!(dry["data"], executed);
-    assert!(dry["data"]["health"].is_null());
+    let mut preview = dry["data"].clone();
+    let preview_health = preview.as_object_mut().unwrap().remove("health").unwrap();
+    assert_eq!(preview_health, health);
+    assert_eq!(preview, executed);
     assert_eq!(health["schema_version"], "lwiki.health.v1");
     assert_eq!(health["observation"], "published_generation");
     assert_eq!(health["known_issues"], false);
@@ -1594,13 +1604,26 @@ fn indexed_cli_general_search_preserves_authored_results_filters_and_cached_dry_
     same_read_tree(&normalized, before);
     fs::write(
         normalized.root.join("pages/a.md"),
-        b"external replacement\n",
+        authored_page("page_general_a", "external replacement\n"),
     )
     .unwrap();
-    let stale = normalized.cli(&["search", "page_general_a", "--no-sync"]);
+    let stale = normalized.cli(&["search", "page_general_a", "--no-sync", "--mode", "lexical"]);
     assert_eq!(stale["data"]["hits"][0]["title"], "PlanningSignal Handbook");
-    let plain = normalized.cli(&["search", "page_general_a"]);
-    assert_eq!(plain["data"], stale["data"]);
+    let current = normalized.cli(&["search", "external replacement", "--mode", "lexical"]);
+    assert_eq!(current["meta"]["freshness"], "verified_snapshot");
+    assert!(
+        current["data"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| {
+                hit["path"] == "pages/a.md"
+                    && hit["excerpt"]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("external replacement")
+            })
+    );
     // Literal discovery includes adopted Pages. The cached read still exposes
     // pinned old bytes without manufacturing verified citations.
     let literal = normalized.cli(&["search", "PlanningSignal", "--no-sync", "--mode", "literal"]);
@@ -1673,6 +1696,8 @@ fn indexed_cli_general_snapshot_context_preserves_reviewed_facets_and_dry_run() 
         "--no-sync",
         "--kind",
         "page",
+        "--mode",
+        "lexical",
     ];
     let expected = legacy.cli(&args);
     let before = tree(&normalized.root);
@@ -1823,7 +1848,6 @@ fn indexed_cli_general_context_refuses_unsupported_modes_before_provider_setup()
             ("snapshot", "literal"),
             ("snapshot", "semantic"),
             ("snapshot", "hybrid"),
-            ("current", "lexical"),
             ("historical", "lexical"),
         ] {
             let mut args = vec![];
@@ -1844,6 +1868,21 @@ fn indexed_cli_general_context_refuses_unsupported_modes_before_provider_setup()
             fixture.cli_error(&args, "CAPABILITY_UNAVAILABLE");
         }
     }
+    let current = fixture.cli(&[
+        "context",
+        "PlanningSignal",
+        "--scope",
+        "current",
+        "--mode",
+        "lexical",
+    ]);
+    assert_eq!(current["meta"]["freshness"], "verified_snapshot");
+    assert!(
+        current["data"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("amber checklist")
+    );
     same_read_tree(&fixture, before);
 }
 
@@ -1858,17 +1897,10 @@ impl Fixture {
         fs::create_dir_all(&outside).unwrap();
         let input = outside.join("source input.md");
         fs::write(&input, FIRST).unwrap();
-        let output = Command::new(binary())
-            .current_dir(&outside)
-            .args(["--json", "--offline", "init"])
-            .arg(&root)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
-        );
+        // These workflows cover legacy and retained-v2 storage explicitly;
+        // ordinary init now creates readable-source storage instead.
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("WIKI.md"), b"---\nwiki_schema: '1'\nwiki_kind: vault\nwiki_id: vault_public_indexed_cli\ntitle: Public source fixture\n---\n").unwrap();
         let mut fixture = Self {
             _temp: temp,
             root,
@@ -2103,7 +2135,7 @@ fn indexed_cli_staged_capture_refuses_externally_occupied_source_parent() {
     let source = staged["data"]["allocated_ids"]["source"].as_str().unwrap();
     let change = staged["data"]["change"]["change_id"].as_str().unwrap();
     let occupied = fixture.root.join(format!("sources/{source}"));
-    fs::create_dir(&occupied).unwrap();
+    fs::create_dir_all(&occupied).unwrap();
     let before = canonical_tree(&fixture.root);
     fixture.cli_error(&["changes", "apply", change], "CONTENT_CONFLICT");
     assert_eq!(canonical_tree(&fixture.root), before);
@@ -2778,7 +2810,8 @@ fn exact_read_source_citation(
     eligibility: &str,
     scope: CitationScope,
 ) -> CitationRef {
-    assert_eq!(read["meta"]["freshness"], "indexed_evidence");
+    assert_eq!(read["meta"]["freshness"], "verified_snapshot");
+    assert!(read["meta"]["verified_at"].is_string());
     assert_eq!(read["data"]["source_citation"]["eligibility"], eligibility);
     let citation: CitationRef =
         serde_json::from_value(read["data"]["source_citation"]["citation"].clone()).unwrap();
@@ -2916,7 +2949,15 @@ fn indexed_cli_read_source_citation_unicode_continuation_and_uncited_notes() {
         .current_dir(&fixture.outside)
         .arg("--wiki")
         .arg(&fixture.root)
-        .args(["--offline", "read", "--path", &path, "--max-bytes", &cap])
+        .args([
+            "--offline",
+            "--verbose",
+            "read",
+            "--path",
+            &path,
+            "--max-bytes",
+            &cap,
+        ])
         .output()
         .unwrap();
     assert!(
@@ -3036,8 +3077,12 @@ fn indexed_cli_read_source_citation_refresh_withdraw_and_external_edit() {
     // must refuse rather than emitting cached bytes with a stale citation.
     let changed = "External bytes differ from the indexed immutable capture.\n";
     fs::write(fixture.root.join(&new_path), changed).unwrap();
-    let refused = fixture.cli_error(&["read", "--path", &new_path], "FRESHNESS_CONFLICT");
+    let refused = fixture.cli_error(&["read", "--path", &new_path], "SOURCE_INTEGRITY");
     assert!(refused["data"].is_null(), "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "complete content hash mismatch"
+    );
     assert_eq!(
         fs::read(fixture.root.join(&new_path)).unwrap(),
         changed.as_bytes()

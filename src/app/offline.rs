@@ -1759,6 +1759,45 @@ pub(crate) fn init_with_title_intent(
     } else {
         VaultRoot::for_initialization(path)?.path().to_path_buf()
     };
+    let collision = |target: &std::path::Path| {
+        let mut error = WikiError::new(
+            ErrorCode::ContentConflict,
+            format!(
+                "initialization refuses occupied managed path: {}",
+                target.display()
+            ),
+        );
+        error.hint = Some(
+            "Use a different wiki folder, or deliberately rename the author folder that occupies this reserved name before retrying.".into(),
+        );
+        error.details = serde_json::json!({"path":target,"reason":"managed_path_collision"});
+        error
+    };
+    // Recovery requires a real directory and a regular marker. Report occupied
+    // paths before recovery probes try to read them or their children.
+    for (name, directory) in [(".wiki", true), ("WIKI.md", false)] {
+        let target = resolved.join(name);
+        match std::fs::symlink_metadata(&target) {
+            Ok(metadata)
+                if metadata.file_type().is_symlink()
+                    || (directory && !metadata.is_dir())
+                    || (!directory && !metadata.is_file()) =>
+            {
+                return Err(collision(&target));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(WikiError::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "inspect initialization managed path {}: {error}",
+                        target.display()
+                    ),
+                ));
+            }
+        }
+    }
     let bootstrap = if exists && existing {
         crate::storage::source_layout::resume_bootstrap_marker(
             &VaultRoot::for_initialization(&resolved)?,
@@ -1816,20 +1855,6 @@ pub(crate) fn init_with_title_intent(
         "changes",
         ".wiki",
     ];
-    let collision = |target: &std::path::Path| {
-        let mut error = WikiError::new(
-            ErrorCode::ContentConflict,
-            format!(
-                "initialization refuses occupied managed path: {}",
-                target.display()
-            ),
-        );
-        error.hint = Some(
-            "Use a different wiki folder, or deliberately rename the author folder that occupies this reserved name before retrying.".into(),
-        );
-        error.details = serde_json::json!({"path":target,"reason":"managed_path_collision"});
-        error
-    };
     let check_absent = |names: &[&str]| -> Result<()> {
         for name in names {
             let target = resolved.join(name);

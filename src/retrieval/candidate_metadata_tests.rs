@@ -210,6 +210,10 @@ fn assert_candidate_columns(f: &Fixture, plan: &QueryPlan, tags: bool) {
     let connection = reader.connection();
     let (table,index): (i64,i64) = connection.query_row("SELECT (SELECT rootpage FROM sqlite_schema WHERE name='documents'),(SELECT rootpage FROM sqlite_schema WHERE name='document_candidate_metadata')",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
     let (sql, values) = scalar_sql(plan, "1", 3, true);
+    let (keys, _) = sql.split_once("SELECT c.doc_row").unwrap();
+    let readable = "(coalesce(d.kind,'') NOT IN ('source','revision') OR length(trim(d.body,char(9)||char(10)||char(11)||char(12)||char(13)||' '))>0)";
+    assert!(keys.contains(readable));
+    assert!(!keys.replace(readable, "1").contains("d.body"));
     let ops = connection
         .prepare(&format!("EXPLAIN {sql}"))
         .unwrap()
@@ -238,22 +242,24 @@ fn assert_candidate_columns(f: &Fixture, plan: &QueryPlan, tags: bool) {
         .filter(|(op, cursor, _)| op == "Column" && cursors.get(cursor) == Some(&index))
         .map(|(_, _, column)| *column)
         .collect();
-    if tags {
-        assert!(!table_columns.is_empty());
-        assert!(
-            table_columns.iter().all(|c| *c == 9),
-            "table columns {table_columns:?}"
-        );
-    } else {
-        assert!(table_columns.is_empty(), "table columns {table_columns:?}");
-    }
+    // Column 11 is body, read only by the exact guarded predicate above.
+    // Tags may additionally read column 9; no other payload column is admitted.
+    assert!(
+        table_columns.contains(&11),
+        "table columns {table_columns:?}"
+    );
+    assert_eq!(table_columns.contains(&9), tags);
+    assert!(
+        table_columns.iter().all(|c| *c == 11 || tags && *c == 9),
+        "table columns {table_columns:?}"
+    );
     assert!(
         index_columns.contains(&4),
-        "eligibility must come from covering index: {index_columns:?}"
+        "eligibility must come from candidate metadata index: {index_columns:?}"
     );
     assert!(
         index_columns.contains(&3),
-        "kind must come from covering index: {index_columns:?}"
+        "kind must come from candidate metadata index: {index_columns:?}"
     );
 }
 
@@ -276,7 +282,7 @@ fn candidate_metadata_covering_and_tag_paths_avoid_large_payload_overflow() {
         fixed
             .plans
             .iter()
-            .any(|p| p.contains("COVERING INDEX document_candidate_metadata")),
+            .any(|p| p.contains("INDEX document_candidate_metadata")),
         "{fixed:?}"
     );
     assert!(old.misses >= fixed.misses * 4 + 256, "{old:?} -> {fixed:?}");
@@ -426,8 +432,26 @@ fn candidate_metadata_index_tracks_public_title_and_new_revision_deltas() {
     let reader = f.reader();
     assert_eq!(reader.snapshot().generation, 2);
     assert_index_matches_table(&reader);
-    let title_hits =
+    let ordinary_hits =
         search_catalog(&reader, "Changed metadata title", &QueryPlan::default()).unwrap();
+    assert!(!ordinary_hits.hits.iter().any(|h| {
+        h.locator
+            .record
+            .as_ref()
+            .is_some_and(|r| r.record_id == f.source)
+    }));
+    let title_hits = search_catalog(
+        &reader,
+        "Changed metadata title",
+        &QueryPlan {
+            filters: SearchFilters {
+                kinds: vec![RecordKind::Source],
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(title_hits.hits.iter().any(|h| {
         h.locator
             .record
