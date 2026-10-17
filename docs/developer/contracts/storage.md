@@ -201,6 +201,15 @@ After a version4 legacy Page admission commits and its publication is acknowledg
 
 Indexed apply previews check retained intent, payloads, journal/operation authority and existing file guards without opening SQLite. They preserve stable incomplete journal tails and do not repair missing journals. Their output marks index layout, ownership and publication admission unchecked; observed Prepared status is not proof of apply readiness. Historical terminal retries retain their existing shortcut. Real apply and recovery still perform all SQL admission and publication checks.
 
+Indexed apply reads the exact manifest revision-owner keys before durable file
+writes, using the original pinned catalog and cumulative query limits. The
+session retains those present or absent answers and the same snapshot lease.
+Later guards refuse unselected keys rather than treating them as absent. File
+writes cannot expire an ownership lookup that has already completed; ordinary
+query deadlines and work limits remain unchanged. Live operation authority,
+manifest, receipt, immutable membership and publication checks still run at
+their existing boundaries.
+
 Independent maintenance reads and temporary-file staging may use a command-owned joined worker pool. Every existing guard checkpoint remains; the writer reduces observations in descriptor order and owns journal, canonical replacement, directory syncing and catalog publication. A failed batch joins all admitted work before any installation. Unsupported platforms and storage initialization, recovery, pending migration or import authority scopes use the owner-sequential path.
 
 During one legacy apply call, competing-owner checks may reuse a historical

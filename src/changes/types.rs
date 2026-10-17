@@ -100,8 +100,10 @@ pub(crate) struct RevisionOwnerRow {
     pub change: PreparedChange,
 }
 
-/// A complete historical ownership registry at one pinned published epoch.
+/// Ownership answers from a complete historical registry at one pinned epoch.
 /// Implementations must refuse an unready registry, including an empty one.
+/// A selected implementation may admit a fixed set of keys, but must refuse
+/// every unselected key rather than report it as absent.
 pub(crate) trait RevisionOwnershipLookup {
     fn snapshot(&self) -> &ReadSnapshot;
     fn vault_id(&self) -> &RecordId;

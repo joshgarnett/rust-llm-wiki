@@ -249,6 +249,67 @@ fn whole_snapshot(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, std::time::SystemT
     result
 }
 
+fn assert_public_file_members_refresh(f: &Fixture, layout: LayoutKind) {
+    let count = f.sources.len();
+    let changed: Vec<_> = (0..count)
+        .map(|i| format!("# New fact {i}\nBlue capacity {}.\n", 31 + i).into_bytes())
+        .collect();
+    // Reverse caller order exercises sorted internal planning versus ordinal results.
+    let items = (0..count).rev().map(|i| f.item(i, &changed[i])).collect();
+    let old_trees: Vec<_> = f
+        .sources
+        .iter()
+        .map(|(source, revision, _)| {
+            let path = f.physical(format!("sources/{source}/revisions/{revision}"));
+            (path.clone(), canonical_snapshot(&path))
+        })
+        .collect();
+    let request = f.public_file(items);
+    let caller_before = whole_snapshot(&f.inputs);
+    let refresh_started = std::time::Instant::now();
+    let outcome = f.app().source_refresh_batch_file(&request).unwrap_or_else(|error| {
+        panic!(
+            "source refresh batch failed: layout={layout:?}, members={count}, elapsed={:?}, error={error:?}",
+            refresh_started.elapsed()
+        )
+    });
+    eprintln!(
+        "source refresh batch succeeded: layout={layout:?}, members={count}, elapsed={:?}",
+        refresh_started.elapsed()
+    );
+    assert_eq!(outcome.status, Some(ChangeStatus::Committed));
+    assert!(outcome.change.is_some());
+    assert_eq!(outcome.items.len(), count);
+    for (ordinal, item) in outcome.items.iter().enumerate() {
+        let index = count - 1 - ordinal;
+        let (source, old, original) = &f.sources[index];
+        assert_eq!(item.ordinal, ordinal);
+        assert_eq!(&item.source_id, source);
+        assert_eq!(item.previous_revision_id.as_ref(), Some(old));
+        assert_eq!(item.reused, Some(false));
+        assert_eq!(item.no_op, Some(false));
+        assert!(item.capture_state.is_some());
+        let new = item.revision_id.as_ref().unwrap();
+        assert_ne!(new, old);
+        f.assert_current(source, new, &changed[index]);
+        for name in ["original.bin", "content.md"] {
+            assert_eq!(f.source_bytes(source, old, name), *original);
+        }
+    }
+    for (path, bytes) in old_trees {
+        assert_eq!(
+            canonical_snapshot(&path),
+            bytes,
+            "old immutable tree changed"
+        );
+    }
+    assert_eq!(whole_snapshot(&f.inputs), caller_before);
+    let checked = f.app().check().unwrap();
+    assert!(checked.complete);
+    assert_eq!(checked.error_count, 0, "{:?}", checked.diagnostics);
+    assert_eq!(checked.cache_matches_canonical, Some(true));
+}
+
 #[test]
 fn one_and_sixteen_public_file_members_preserve_identity_history_and_current_reads_in_all_layouts()
 {
@@ -260,65 +321,50 @@ fn one_and_sixteen_public_file_members_preserve_identity_history_and_current_rea
         for count in [1, 16] {
             eprintln!("source refresh batch case start: layout={layout:?}, members={count}");
             let f = Fixture::with_layout(layout, count);
-            let changed: Vec<_> = (0..count)
-                .map(|i| format!("# New fact {i}\nBlue capacity {}.\n", 31 + i).into_bytes())
-                .collect();
-            // Reverse caller order exercises sorted internal planning versus ordinal results.
-            let items = (0..count).rev().map(|i| f.item(i, &changed[i])).collect();
-            let old_trees: Vec<_> = f
-                .sources
-                .iter()
-                .map(|(source, revision, _)| {
-                    let path = f.physical(format!("sources/{source}/revisions/{revision}"));
-                    (path.clone(), canonical_snapshot(&path))
-                })
-                .collect();
-            let request = f.public_file(items);
-            let caller_before = whole_snapshot(&f.inputs);
-            let refresh_started = std::time::Instant::now();
-            let outcome = f.app().source_refresh_batch_file(&request).unwrap_or_else(|error| {
-                panic!(
-                    "source refresh batch failed: layout={layout:?}, members={count}, elapsed={:?}, error={error:?}",
-                    refresh_started.elapsed()
-                )
-            });
-            eprintln!(
-                "source refresh batch succeeded: layout={layout:?}, members={count}, elapsed={:?}",
-                refresh_started.elapsed()
-            );
-            assert_eq!(outcome.status, Some(ChangeStatus::Committed));
-            assert!(outcome.change.is_some());
-            assert_eq!(outcome.items.len(), count);
-            for (ordinal, item) in outcome.items.iter().enumerate() {
-                let index = count - 1 - ordinal;
-                let (source, old, original) = &f.sources[index];
-                assert_eq!(item.ordinal, ordinal);
-                assert_eq!(&item.source_id, source);
-                assert_eq!(item.previous_revision_id.as_ref(), Some(old));
-                assert_eq!(item.reused, Some(false));
-                assert_eq!(item.no_op, Some(false));
-                assert!(item.capture_state.is_some());
-                let new = item.revision_id.as_ref().unwrap();
-                assert_ne!(new, old);
-                f.assert_current(source, new, &changed[index]);
-                for name in ["original.bin", "content.md"] {
-                    assert_eq!(f.source_bytes(source, old, name), *original);
-                }
-            }
-            for (path, bytes) in old_trees {
-                assert_eq!(
-                    canonical_snapshot(&path),
-                    bytes,
-                    "old immutable tree changed"
-                );
-            }
-            assert_eq!(whole_snapshot(&f.inputs), caller_before);
-            let checked = f.app().check().unwrap();
-            assert!(checked.complete);
-            assert_eq!(checked.error_count, 0, "{:?}", checked.diagnostics);
-            assert_eq!(checked.cache_matches_canonical, Some(true));
+            assert_public_file_members_refresh(&f, layout);
         }
     }
+}
+
+#[test]
+fn sixteen_current_layout_public_refresh_survives_delayed_canonical_mutation() {
+    use crate::changes::apply::maintenance_guard_tests::{self as hooks, Event};
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
+
+    let layout = LayoutKind::ReadableSources;
+    let f = Fixture::with_layout(layout, 16);
+    let app = f.app();
+    let delay = Duration::from_secs(31);
+    let observed = Arc::new(Mutex::new((0usize, Duration::ZERO)));
+    let reached = observed.clone();
+    // Arm only this fixture after all initial captures. The first canonical
+    // mutation is past admission/preflight and holds the original session.
+    let _hook = hooks::install(app.fs().root(), move |event| {
+        if matches!(event, Event::BeforeMutation(_)) {
+            let mut observed = reached.lock().unwrap();
+            if observed.0 == 0 {
+                observed.0 += 1;
+                let started = Instant::now();
+                std::thread::sleep(delay);
+                observed.1 = started.elapsed();
+                assert!(observed.1 >= delay);
+                eprintln!(
+                    "source refresh delayed canonical mutation: layout=ReadableSources, members=16, delay_count={}, elapsed_ms={}, minimum_ms={}",
+                    observed.0,
+                    observed.1.as_millis(),
+                    delay.as_millis()
+                );
+            }
+        }
+        Ok(())
+    });
+    // No retry: require the same outcome, citations, bytes, immutable history,
+    // request preservation and canonical-cache agreement as ordinary refresh.
+    assert_public_file_members_refresh(&f, layout);
+    let observed = observed.lock().unwrap();
+    assert_eq!(observed.0, 1);
+    assert!(observed.1 >= delay);
 }
 
 #[test]

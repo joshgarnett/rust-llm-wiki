@@ -13,7 +13,7 @@ use super::{
 use crate::{
     changes::{
         ChangeEngine, ChangeStatus, PreparedChange, ReadDependency, RevisionOwnerRow,
-        RevisionOwnershipLookup,
+        RevisionOwnershipLookup, RevisionTreeKey,
         indexed_refresh::{
             IndexedRefreshPhase, IndexedRefreshProof, IndexedWriteOperation, LegacyPageAdmission,
         },
@@ -161,11 +161,106 @@ pub(crate) struct IndexedRefreshSession<'a> {
     sql_writer: selector::DeltaWriter<'a>,
     // Only AtBase opens this read transaction. It never supplies finalization authority.
     starting: Option<QuerySnapshot>,
+    ownership: Option<SelectedRevisionOwnership>,
     proof: IndexedRefreshProof,
     delta: RetainedDelta,
     phase: IndexedRefreshPhase,
     selected_bytes_remaining: Cell<usize>,
     graph_budget: Option<super::graph_projection::GraphBudget>,
+}
+
+/// Exact answers from the admitted base, acquired before durable file work.
+/// The session retains its original query lease, but owner probes use only these
+/// bounded answers after acquisition. Graph admission keeps its original reader.
+struct SelectedRevisionOwnership {
+    vault_id: RecordId,
+    snapshot: ReadSnapshot,
+    answers: Vec<(RevisionTreeKey, Option<PreparedChange>)>,
+}
+impl SelectedRevisionOwnership {
+    fn capture(
+        pinned: &QuerySnapshot,
+        vault_id: &RecordId,
+        base: &ReadSnapshot,
+        selected: &[RevisionOwnerRow],
+    ) -> Result<Self> {
+        if RevisionOwnershipLookup::vault_id(pinned) != vault_id
+            || RevisionOwnershipLookup::snapshot(pinned) != base
+        {
+            return Err(recovery(
+                "refresh base or vault changed before ownership lookup opened",
+            ));
+        }
+        // This must also run for an empty selected domain. Absence of requested
+        // trees cannot substitute for a complete pinned ownership registry.
+        RevisionOwnershipLookup::require_ready(pinned)?;
+        let limits = QueryReadLimits::default();
+        if selected.len() > limits.max_rows {
+            return Err(budget("selected revision ownership exceeds row ceiling"));
+        }
+        let mut answers = Vec::new();
+        answers
+            .try_reserve_exact(selected.len())
+            .map_err(|_| budget("selected revision ownership allocation failed"))?;
+        let vector_bytes = answers
+            .capacity()
+            .checked_mul(std::mem::size_of::<(RevisionTreeKey, Option<PreparedChange>)>())
+            .ok_or_else(|| budget("selected revision ownership size overflow"))?;
+        let mut owned_bytes =
+            super::normalized_delta::counted(&(vault_id, base), limits.max_row_bytes)?
+                .checked_add(vector_bytes)
+                .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+                .ok_or_else(|| budget("selected revision ownership size overflow"))?;
+        for row in selected {
+            // The caller has authenticated these exact manifest roots against
+            // the retained delta. Each answer still uses the original reader's
+            // cumulative elapsed, row, byte and VM allowances.
+            let owner = RevisionOwnershipLookup::revision_owner(pinned, &row.key)?;
+            let encoded =
+                super::normalized_delta::counted(&(&row.key, &owner), limits.max_row_bytes)?;
+            owned_bytes = owned_bytes
+                .checked_add(encoded)
+                .filter(|bytes| {
+                    bytes
+                        .checked_add(pinned.usage().bytes)
+                        .is_some_and(|total| total <= limits.max_bytes)
+                })
+                .ok_or_else(|| budget("selected revision ownership exceeds byte ceiling"))?;
+            answers.push((row.key.clone(), owner));
+        }
+        answers.sort_by(|left, right| left.0.cmp(&right.0));
+        if answers.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(recovery("selected revision ownership has duplicate roots"));
+        }
+        let selected = Self {
+            vault_id: vault_id.clone(),
+            snapshot: base.clone(),
+            answers,
+        };
+        // Include all Rust assembly above in the original acquisition clock.
+        pinned.check_query_budget()?;
+        Ok(selected)
+    }
+}
+impl RevisionOwnershipLookup for SelectedRevisionOwnership {
+    fn snapshot(&self) -> &ReadSnapshot {
+        &self.snapshot
+    }
+    fn vault_id(&self) -> &RecordId {
+        &self.vault_id
+    }
+    fn require_ready(&self) -> Result<()> {
+        // Private construction already proved readiness under the original
+        // reader budget. Repeating SQL here would age that budget through I/O.
+        Ok(())
+    }
+    fn revision_owner(&self, key: &RevisionTreeKey) -> Result<Option<PreparedChange>> {
+        let index = self
+            .answers
+            .binary_search_by(|(candidate, _)| candidate.cmp(key))
+            .map_err(|_| recovery("revision ownership key is outside the admitted selection"))?;
+        Ok(self.answers[index].1.clone())
+    }
 }
 
 fn recovery(message: &str) -> WikiError {
@@ -2343,17 +2438,17 @@ impl<'a> IndexedRefreshSession<'a> {
             operation_authority::load(&catalog.fs, &catalog.vault_id, Presence::Required)?
                 .ok_or_else(|| recovery("refresh authority is absent"))?;
         require_authority(&authority, &proof, phase, false)?;
-        let starting = if phase == IndexedRefreshPhase::AtBase {
+        let (starting, ownership) = if phase == IndexedRefreshPhase::AtBase {
             let query = catalog.query_snapshot(QueryReadLimits::default())?;
-            if QueryCatalog::snapshot(&query) != &proof.base {
-                return Err(recovery(
-                    "refresh base changed before ownership lookup opened",
-                ));
-            }
-            RevisionOwnershipLookup::require_ready(&query)?;
-            Some(query)
+            let ownership = SelectedRevisionOwnership::capture(
+                &query,
+                &proof.vault_id,
+                &proof.base,
+                &delta.rows.owners,
+            )?;
+            (Some(query), Some(ownership))
         } else {
-            None
+            (None, None)
         };
         let catalog = Catalog::with_options(
             catalog.fs.clone(),
@@ -2365,6 +2460,7 @@ impl<'a> IndexedRefreshSession<'a> {
             writer,
             sql_writer,
             starting,
+            ownership,
             proof,
             delta,
             phase,
@@ -2401,9 +2497,9 @@ impl<'a> IndexedRefreshSession<'a> {
         self.phase
     }
     pub(crate) fn starting_ownership_lookup(&self) -> Result<&dyn RevisionOwnershipLookup> {
-        self.starting
+        self.ownership
             .as_ref()
-            .map(|query| query as &dyn RevisionOwnershipLookup)
+            .map(|selected| selected as &dyn RevisionOwnershipLookup)
             .ok_or_else(|| recovery("published refresh has no starting ownership capability"))
     }
     fn retained(&self) -> Result<()> {
@@ -2583,6 +2679,7 @@ impl<'a> IndexedRefreshSession<'a> {
                 // Set this before a fault can return: this session can never publish twice.
                 self.phase = IndexedRefreshPhase::AlreadyPublished;
                 self.starting = None;
+                self.ownership = None;
                 if let Some(fault) = &self.catalog.options.fault {
                     fault.check(PublicationCheckpoint::AfterCommit)?;
                 }
@@ -2783,9 +2880,6 @@ pub(super) fn configure_delta(connection: &rusqlite::Connection) -> Result<()> {
     connection
         .set_limit(Limit::SQLITE_LIMIT_LENGTH, 8 * 1024 * 1024)
         .map_err(sql::sql_error)?;
-    connection
-        .execute_batch("PRAGMA mmap_size=0; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE;")
-        .map_err(sql::sql_error)?;
     let started = Instant::now();
     let mut steps = 0u64;
     connection
@@ -2816,12 +2910,260 @@ pub(super) fn configure_delta(connection: &rusqlite::Connection) -> Result<()> {
                 interrupted
             }),
         )
+        .map_err(sql::sql_error)?;
+    // This existing SQL phase has a fresh finite allowance. Install it before
+    // its first statements, which must not run under the preceding phase's age.
+    connection
+        .execute_batch("PRAGMA mmap_size=0; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE;")
         .map_err(sql::sql_error)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ownership_fixture() -> (tempfile::TempDir, Catalog, WriterPermit) {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("WIKI.md"),
+            "---\nwiki_schema: '1'\nwiki_id: vault_selected_ownership\nwiki_kind: vault\ntitle: Selected ownership\n---\n",
+        )
+        .unwrap();
+        let fs = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+        let writer = WriterPermit::acquire(fs.root(), Duration::ZERO).unwrap();
+        let catalog = Catalog::new(fs, RecordId::new("vault_selected_ownership").unwrap());
+        catalog.rebuild_normalized(&writer).unwrap();
+        (temp, catalog, writer)
+    }
+    fn ownership_row(name: &str) -> RevisionOwnerRow {
+        RevisionOwnerRow {
+            key: RevisionTreeKey {
+                source_component: format!("source_{name}"),
+                revision_component: format!("revision_{name}"),
+            },
+            change: PreparedChange {
+                change_id: RecordId::new("change_selected_manifest").unwrap(),
+                manifest_hash: Blake3Hash::digest(b"selected manifest"),
+            },
+        }
+    }
+    fn edit_ownership_catalog(catalog: &Catalog, edit: impl FnOnce(&rusqlite::Connection)) {
+        let query = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+        let path = query.connection().path().unwrap().to_owned();
+        drop(query);
+        let connection = rusqlite::Connection::open(path).unwrap();
+        selector::configure_wal(&connection).unwrap();
+        edit(&connection);
+    }
+
+    #[test]
+    fn selected_ownership_prefetch_preserves_exact_answers_and_refuses_unselected_keys() {
+        let (_temp, catalog, _writer) = ownership_fixture();
+        let present = ownership_row("present");
+        let absent = ownership_row("absent");
+        let owner = PreparedChange {
+            change_id: RecordId::new("change_existing_owner").unwrap(),
+            manifest_hash: Blake3Hash::digest(b"existing owner manifest"),
+        };
+        edit_ownership_catalog(&catalog, |connection| {
+            connection
+                .execute(
+                    "INSERT INTO revision_tree_owners VALUES(?1,?2,?3,?4)",
+                    params![
+                        present.key.source_component,
+                        present.key.revision_component,
+                        owner.change_id.as_str(),
+                        owner.manifest_hash.as_str()
+                    ],
+                )
+                .unwrap();
+        });
+        let query = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+        let base = QueryCatalog::snapshot(&query).clone();
+        let selected = SelectedRevisionOwnership::capture(
+            &query,
+            &catalog.vault_id,
+            &base,
+            &[present.clone(), absent.clone()],
+        )
+        .unwrap();
+        assert_eq!(selected.snapshot(), &base);
+        assert_eq!(selected.vault_id(), &catalog.vault_id);
+        let acquired = query.usage();
+        // Once captured, no guard probe executes SQL, even if that original
+        // connection would now interrupt. Its snapshot lease remains held.
+        query
+            .connection()
+            .progress_handler(1, Some(|| true))
+            .unwrap();
+        for _ in 0..3 {
+            selected.require_ready().unwrap();
+            assert_eq!(
+                selected.revision_owner(&present.key).unwrap(),
+                Some(owner.clone())
+            );
+            assert_eq!(selected.revision_owner(&absent.key).unwrap(), None);
+        }
+        assert_eq!(query.usage(), acquired);
+        assert_eq!(
+            selected
+                .revision_owner(&ownership_row("unselected").key)
+                .unwrap_err()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+    }
+
+    #[test]
+    fn selected_ownership_prefetch_requires_ready_registry_and_exact_vault_base() {
+        let (_temp, catalog, _writer) = ownership_fixture();
+        let query = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+        let base = QueryCatalog::snapshot(&query).clone();
+        let empty =
+            SelectedRevisionOwnership::capture(&query, &catalog.vault_id, &base, &[]).unwrap();
+        empty.require_ready().unwrap();
+        assert_eq!(
+            empty
+                .revision_owner(&ownership_row("not_selected").key)
+                .unwrap_err()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        drop(empty);
+        let query = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+        assert_eq!(
+            SelectedRevisionOwnership::capture(
+                &query,
+                &RecordId::new("vault_other").unwrap(),
+                &base,
+                &[]
+            )
+            .err()
+            .unwrap()
+            .code,
+            ErrorCode::RecoveryRequired
+        );
+        let query = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+        let mut other_base = base.clone();
+        other_base.generation += 1;
+        assert_eq!(
+            SelectedRevisionOwnership::capture(&query, &catalog.vault_id, &other_base, &[])
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        edit_ownership_catalog(&catalog, |connection| {
+            connection
+                .execute("UPDATE catalog_meta SET revision_ownership_version=0", [])
+                .unwrap();
+        });
+        let query = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+        assert_eq!(
+            SelectedRevisionOwnership::capture(&query, &catalog.vault_id, &base, &[])
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::OfflineUnavailable
+        );
+    }
+
+    #[test]
+    fn selected_ownership_prefetch_rejects_malformed_selected_owner_and_truncated_domain() {
+        let (_temp, catalog, _writer) = ownership_fixture();
+        let selected = ownership_row("selected");
+        let query = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+        let base = QueryCatalog::snapshot(&query).clone();
+        let truncated =
+            SelectedRevisionOwnership::capture(&query, &catalog.vault_id, &base, &[]).unwrap();
+        assert_eq!(
+            truncated.revision_owner(&selected.key).unwrap_err().code,
+            ErrorCode::RecoveryRequired
+        );
+        drop(truncated);
+        edit_ownership_catalog(&catalog, |connection| {
+            connection.execute(
+                "INSERT INTO revision_tree_owners VALUES(?1,?2,'change_existing_owner','invalid hash')",
+                params![selected.key.source_component, selected.key.revision_component],
+            ).unwrap();
+        });
+        let query = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+        assert_eq!(
+            SelectedRevisionOwnership::capture(&query, &catalog.vault_id, &base, &[selected])
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::IndexCorrupt
+        );
+    }
+
+    #[test]
+    fn selected_ownership_prefetch_preserves_original_query_work_limits() {
+        for limits in [
+            QueryReadLimits {
+                max_rows: 1,
+                ..Default::default()
+            },
+            QueryReadLimits {
+                max_bytes: 1,
+                ..Default::default()
+            },
+            QueryReadLimits {
+                max_vm_steps: 1000,
+                ..Default::default()
+            },
+        ] {
+            let (temp, catalog, _writer) = ownership_fixture();
+            let selected = ownership_row("bounded");
+            edit_ownership_catalog(&catalog, |connection| {
+                connection
+                    .execute(
+                        "INSERT INTO revision_tree_owners VALUES(?1,?2,?3,?4)",
+                        params![
+                            selected.key.source_component,
+                            selected.key.revision_component,
+                            selected.change.change_id.as_str(),
+                            selected.change.manifest_hash.as_str()
+                        ],
+                    )
+                    .unwrap();
+            });
+            let query = catalog.query_snapshot(limits).unwrap();
+            let base = QueryCatalog::snapshot(&query).clone();
+            let mut domain = vec![selected];
+            domain.extend((0..100).map(|n| ownership_row(&format!("missing_{n}"))));
+            let error =
+                SelectedRevisionOwnership::capture(&query, &catalog.vault_id, &base, &domain)
+                    .err()
+                    .unwrap();
+            assert_eq!(error.code, ErrorCode::BudgetExceeded);
+            assert!(!temp.path().join("sources").exists());
+            assert!(!temp.path().join("changes").exists());
+        }
+    }
+
+    #[test]
+    fn delta_phase_replaces_expired_handler_before_pragmas_and_keeps_vm_limit() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.progress_handler(1, Some(|| true)).unwrap();
+        let interrupted = connection
+            .query_row("SELECT 42", [], |row| row.get::<_, i64>(0))
+            .unwrap_err();
+        assert_eq!(sql::sql_error(interrupted).code, ErrorCode::BudgetExceeded);
+        configure_delta(&connection).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT 42", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            42
+        );
+        let interrupted = connection.query_row(
+            "WITH RECURSIVE work(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM work WHERE n<1000000) SELECT sum(n) FROM work",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).unwrap_err();
+        assert_eq!(sql::sql_error(interrupted).code, ErrorCode::BudgetExceeded);
+    }
 
     #[test]
     fn selected_scope_rejects_unrelated_empty_owner_replacements() {
