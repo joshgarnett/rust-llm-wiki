@@ -22,7 +22,7 @@ command.
 In the folder where you saved `install.sh`, run:
 
 ```sh
-sh install.sh --version 0.3.0
+sh install.sh --version 0.4.0
 ```
 
 Use the version of the release you selected, without the leading `v`. The default
@@ -45,7 +45,7 @@ line to your shell's startup file so future terminals can find it. For zsh, use
 To install somewhere else, pass an absolute path you own:
 
 ```sh
-sh install.sh --version 0.3.0 --prefix "/absolute/path/to/lwiki-install"
+sh install.sh --version 0.4.0 --prefix "/absolute/path/to/lwiki-install"
 ```
 
 Add that location's `bin` directory to PATH instead. The installer does not
@@ -61,7 +61,7 @@ Download `release-manifest.txt` and the archive for your system from the same
 release. Put both in one folder, then tell the installer where to find them:
 
 ```sh
-sh install.sh --version 0.3.0 --from-dir "/absolute/path/to/release-files"
+sh install.sh --version 0.4.0 --from-dir "/absolute/path/to/release-files"
 ```
 
 The archive names end in `aarch64-apple-darwin.tar.gz` for Apple silicon macOS
