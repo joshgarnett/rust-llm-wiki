@@ -371,8 +371,12 @@ impl OfflineApp {
                 if started.elapsed() >= ceiling.max_elapsed {
                     return Err(budget());
                 }
-                let mut session =
-                    IndexedRefreshSession::prepare_write(&catalog, &writer, projected)?;
+                let prepared = IndexedRefreshSession::prepare_write(&catalog, &writer, projected);
+                #[cfg(test)]
+                if let Err(error) = &prepared {
+                    eprintln!("LWIKI_BATCH_REFRESH_FAILURE phase=prepare_write error={error:?}");
+                }
+                let mut session = prepared?;
                 let change = session.proof().change.clone();
                 outcome.change = Some(change.clone());
                 if self.options.stage_only {
@@ -382,7 +386,11 @@ impl OfflineApp {
                 let report = self
                     .engine()?
                     .apply_indexed_refresh(&writer, &mut session)
-                    .map_err(|error| super::offline::retained_error(error, &change))?;
+                    .map_err(|error| {
+                        #[cfg(test)]
+                        eprintln!("LWIKI_BATCH_REFRESH_FAILURE phase=apply error={error:?}");
+                        super::offline::retained_error(error, &change)
+                    })?;
                 outcome.status = Some(report.status);
                 outcome.snapshot = report.snapshot;
                 Ok(outcome)

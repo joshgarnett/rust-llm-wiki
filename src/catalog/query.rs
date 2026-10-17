@@ -293,6 +293,8 @@ pub(super) fn configure_query_at(
     // A one-op callback is required for a cumulative connection allowance.
     let interval = 1;
     let mut remaining = limits.max_vm_steps;
+    #[cfg(test)]
+    let (maximum_vm_steps, maximum_elapsed_ms) = (limits.max_vm_steps, limits.max_elapsed_ms);
     connection
         .progress_handler(
             interval,
@@ -303,6 +305,30 @@ pub(super) fn configure_query_at(
                 #[cfg(test)]
                 super::query_diagnostics::vm_step();
                 if start.elapsed() >= elapsed || remaining <= interval as u64 {
+                    #[cfg(test)]
+                    {
+                        let observed_elapsed = start.elapsed();
+                        let elapsed_exhausted = observed_elapsed >= elapsed;
+                        let vm_exhausted = remaining <= interval as u64;
+                        let reason = if elapsed_exhausted && vm_exhausted {
+                            "both"
+                        } else if vm_exhausted {
+                            "vm"
+                        } else {
+                            "elapsed"
+                        };
+                        let executed_vm = maximum_vm_steps
+                            .saturating_sub(remaining)
+                            .saturating_add(interval as u64);
+                        eprintln!(
+                            "lwiki test SQLite budget interrupt handler=configure_query_at elapsed_ms={} max_elapsed_ms={} executed_vm={} max_vm={} reason={}",
+                            observed_elapsed.as_millis(),
+                            maximum_elapsed_ms,
+                            executed_vm,
+                            maximum_vm_steps,
+                            reason
+                        );
+                    }
                     return true;
                 }
                 remaining -= interval as u64;

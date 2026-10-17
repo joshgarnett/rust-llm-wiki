@@ -258,6 +258,7 @@ fn one_and_sixteen_public_file_members_preserve_identity_history_and_current_rea
         LayoutKind::ReadableSources,
     ] {
         for count in [1, 16] {
+            eprintln!("source refresh batch case start: layout={layout:?}, members={count}");
             let f = Fixture::with_layout(layout, count);
             let changed: Vec<_> = (0..count)
                 .map(|i| format!("# New fact {i}\nBlue capacity {}.\n", 31 + i).into_bytes())
@@ -274,7 +275,17 @@ fn one_and_sixteen_public_file_members_preserve_identity_history_and_current_rea
                 .collect();
             let request = f.public_file(items);
             let caller_before = whole_snapshot(&f.inputs);
-            let outcome = f.app().source_refresh_batch_file(&request).unwrap();
+            let refresh_started = std::time::Instant::now();
+            let outcome = f.app().source_refresh_batch_file(&request).unwrap_or_else(|error| {
+                panic!(
+                    "source refresh batch failed: layout={layout:?}, members={count}, elapsed={:?}, error={error:?}",
+                    refresh_started.elapsed()
+                )
+            });
+            eprintln!(
+                "source refresh batch succeeded: layout={layout:?}, members={count}, elapsed={:?}",
+                refresh_started.elapsed()
+            );
             assert_eq!(outcome.status, Some(ChangeStatus::Committed));
             assert!(outcome.change.is_some());
             assert_eq!(outcome.items.len(), count);

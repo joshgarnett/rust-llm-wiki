@@ -2793,7 +2793,27 @@ pub(super) fn configure_delta(connection: &rusqlite::Connection) -> Result<()> {
             1000,
             Some(move || {
                 steps += 1000;
-                steps > 10_000_000 || started.elapsed() > Duration::from_secs(30)
+                let interrupted = steps > 10_000_000 || started.elapsed() > Duration::from_secs(30);
+                #[cfg(test)]
+                if interrupted {
+                    let observed_elapsed = started.elapsed();
+                    let elapsed_exhausted = observed_elapsed > Duration::from_secs(30);
+                    let vm_exhausted = steps > 10_000_000;
+                    let reason = if elapsed_exhausted && vm_exhausted {
+                        "both"
+                    } else if vm_exhausted {
+                        "vm"
+                    } else {
+                        "elapsed"
+                    };
+                    eprintln!(
+                        "lwiki test SQLite budget interrupt handler=configure_delta elapsed_ms={} max_elapsed_ms=30000 executed_vm={} max_vm=10000000 reason={}",
+                        observed_elapsed.as_millis(),
+                        steps,
+                        reason
+                    );
+                }
+                interrupted
             }),
         )
         .map_err(sql::sql_error)
